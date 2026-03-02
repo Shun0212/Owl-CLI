@@ -17,6 +17,7 @@ class OwlConfig:
     top_k: int = 10
     file_extensions: list[str] = field(default_factory=lambda: [".py"])
     target_dir: str = "."
+    auto_annotate: bool = False
 
     @classmethod
     def load(
@@ -39,6 +40,8 @@ class OwlConfig:
                 config.top_k = data["top_k"]
             if "file_extensions" in data:
                 config.file_extensions = data["file_extensions"]
+            if "auto_annotate" in data:
+                config.auto_annotate = bool(data["auto_annotate"])
 
         if env_model := os.environ.get("OWL_MODEL_NAME"):
             config.model_name = env_model
@@ -46,6 +49,8 @@ class OwlConfig:
             config.batch_size = int(env_batch)
         if env_top_k := os.environ.get("OWL_TOP_K"):
             config.top_k = int(env_top_k)
+        if os.environ.get("OWL_AUTO_ANNOTATE", "").lower() in ("1", "true", "yes"):
+            config.auto_annotate = True
 
         if model_override:
             config.model_name = model_override

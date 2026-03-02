@@ -28,6 +28,7 @@ class HistoryEntry:
     query: str
     num_results: int
     results: list[HistoryResult] = field(default_factory=list)
+    annotation: str | None = None
 
 
 def save_history_entry(
@@ -71,9 +72,35 @@ def load_history(target_dir: str) -> list[HistoryEntry]:
                 results=[
                     HistoryResult(**r) for r in item.get("results", [])
                 ],
+                annotation=item.get("annotation"),
             )
         )
     return entries
+
+
+def annotate_history(target_dir: str, index: int, annotation: str) -> bool:
+    """Add an annotation to a history entry.
+
+    Args:
+        target_dir: Resolved project directory path.
+        index: 1-based index into the history list (negative for recent entries,
+               e.g. -1 = most recent).
+        annotation: The annotation text to save.
+
+    Returns:
+        True if the entry was found and annotated, False otherwise.
+    """
+    history = _load_history_raw(target_dir)
+    if not history:
+        return False
+
+    try:
+        history[index if index < 0 else index - 1]["annotation"] = annotation
+    except IndexError:
+        return False
+
+    _atomic_write_history(target_dir, history)
+    return True
 
 
 def clear_history(target_dir: str) -> None:

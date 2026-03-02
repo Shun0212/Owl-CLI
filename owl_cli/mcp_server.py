@@ -7,7 +7,7 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
 from .config import OwlConfig
-from .history import clear_history, load_history
+from .history import annotate_history, clear_history, load_history
 from .indexer import CodeSearchEngine
 
 mcp = FastMCP("owl-cli")
@@ -55,7 +55,17 @@ def search_code(query: str, top_k: int = 10, directory: str = ".") -> str:
         }
         for r in results
     ]
-    return json.dumps(data, ensure_ascii=False, indent=2)
+    output = json.dumps(data, ensure_ascii=False, indent=2)
+
+    if config.auto_annotate:
+        output += (
+            "\n\n[auto_annotate] Please evaluate the usefulness of these search"
+            " results and call the annotate_search tool with a brief assessment"
+            " (e.g. whether the results were relevant, which ones were most"
+            " helpful, or if the query should be refined)."
+        )
+
+    return output
 
 
 @mcp.tool()
@@ -136,6 +146,34 @@ def search_history(directory: str = ".", limit: int = 20, clear: bool = False) -
         ensure_ascii=False,
         indent=2,
     )
+
+
+@mcp.tool()
+def annotate_search(
+    annotation: str, directory: str = ".", index: int = -1
+) -> str:
+    """Add an annotation to a search history entry.
+
+    Use this tool after search_code to record observations, summaries,
+    or notes about the search results. By default it annotates the most
+    recent search.
+
+    Args:
+        annotation: The annotation text to attach to the history entry.
+        directory: Absolute path to the directory. You should always set this
+                   to the project you are working on.
+        index: Which history entry to annotate. Use -1 for the most recent
+               search (default), -2 for the one before that, or a positive
+               1-based index.
+
+    Returns:
+        JSON object confirming success or failure.
+    """
+    target_dir = str(Path(directory).resolve())
+    ok = annotate_history(target_dir, index, annotation)
+    if ok:
+        return json.dumps({"status": "ok", "message": "Annotation saved."})
+    return json.dumps({"status": "error", "message": "History entry not found."})
 
 
 def run_mcp_server() -> None:

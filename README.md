@@ -9,6 +9,7 @@ Semantic code search using vector embeddings. Search your codebase with natural 
 - **Differential caching** -- Only re-embeds changed files; unchanged files reuse cached embeddings
 - **Auto-indexing** -- First search automatically builds the index
 - **MCP server** -- Integrates with Claude Code, OpenCode, and other MCP-compatible tools
+- **Search history** -- Saves every query and its results; supports annotations from LLMs or users
 - **JSON output** -- Machine-readable output for scripting and tool integration
 
 ## Requirements
@@ -125,6 +126,25 @@ owl config --clear-cache
 owl config --clear-all-cache
 ```
 
+### History
+
+```bash
+# Show recent search history
+owl history
+
+# Show more entries
+owl history -n 50
+
+# JSON output
+owl history --json
+
+# Annotate a history entry (by index)
+owl history --annotate 1 "Found the config loading logic I needed"
+
+# Clear history
+owl history --clear
+```
+
 ## Configuration
 
 Settings are resolved in this order (later overrides earlier):
@@ -143,6 +163,7 @@ Caches are stored in `~/.cache/owl-cli/` and do not touch the target project dir
 | `OWL_MODEL_NAME` | Sentence-transformer model name | `Shuu12121/Owl-ph2-len2048` |
 | `OWL_BATCH_SIZE` | Encoding batch size | `8` |
 | `OWL_TOP_K` | Default number of results | `10` |
+| `OWL_AUTO_ANNOTATE` | Prompt the LLM to annotate search results via MCP (`1`/`true`/`yes` to enable) | off |
 
 ### `.owl/config.json` example
 
@@ -150,7 +171,8 @@ Caches are stored in `~/.cache/owl-cli/` and do not touch the target project dir
 {
   "model_name": "Shuu12121/Owl-ph2-len2048",
   "batch_size": 16,
-  "top_k": 20
+  "top_k": 10,
+  "auto_annotate": true
 }
 ```
 
@@ -170,6 +192,13 @@ claude mcp add --transport stdio --scope user owl-cli -- \
 ```
 
 Once registered, Claude Code can semantically search your codebase during conversations.
+
+To enable auto-annotation (LLM records usefulness feedback after each search):
+
+```bash
+claude mcp add --transport stdio --scope user owl-cli -- \
+  env OWL_AUTO_ANNOTATE=1 owl mcp
+```
 
 ### Option 2: Custom Slash Command
 
@@ -218,6 +247,20 @@ If you haven't installed Owl-CLI globally, use `uvx` instead:
 
 Once configured, `search_code`, `index_code`, and `index_status` tools become available in Copilot's agent mode (Copilot Chat).
 
+To enable auto-annotation, add the `env` field:
+
+```json
+{
+  "servers": {
+    "owl-cli": {
+      "command": "owl",
+      "args": ["mcp"],
+      "env": { "OWL_AUTO_ANNOTATE": "1" }
+    }
+  }
+}
+```
+
 ## How It Works
 
 1. **Extract** -- tree-sitter parses Python source files and extracts every function/method with metadata (name, class, line range)
@@ -239,6 +282,7 @@ owl_cli/
 ├── model.py                 # SentenceTransformer loading and encoding
 ├── indexer.py               # CodeSearchEngine (build + search)
 ├── cache.py                 # .owl/ cache management
+├── history.py               # Search history and annotations
 ├── mcp_server.py            # FastMCP stdio server
 └── extractors/
     ├── __init__.py           # Extension-based dispatch

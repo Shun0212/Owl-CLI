@@ -15,7 +15,7 @@ from rich.text import Text
 
 from . import __version__
 from .config import OwlConfig, get_index_dir
-from .history import clear_history, load_history
+from .history import annotate_history, clear_history, load_history
 from .indexer import CodeSearchEngine
 
 console = Console(stderr=True)
@@ -221,13 +221,29 @@ def mcp():
 @click.option("--clear", is_flag=True, help="Clear search history.")
 @click.option("--limit", "-n", default=20, type=int, help="Number of entries to show.")
 @click.option("--json", "output_json", is_flag=True, help="Output as JSON.")
-def history(directory, clear, limit, output_json):
+@click.option(
+    "--annotate",
+    nargs=2,
+    type=(int, str),
+    default=None,
+    help="Annotate entry: --annotate INDEX TEXT",
+)
+def history(directory, clear, limit, output_json, annotate):
     """Show or clear search history."""
     target_dir = str(Path(directory).resolve())
 
     if clear:
         clear_history(target_dir)
         console.print("[green]Search history cleared.[/green]")
+        return
+
+    if annotate is not None:
+        idx, text = annotate
+        ok = annotate_history(target_dir, idx, text)
+        if ok:
+            console.print("[green]Annotation saved.[/green]")
+        else:
+            console.print("[red]History entry not found.[/red]")
         return
 
     entries = load_history(target_dir)
@@ -249,11 +265,13 @@ def history(directory, clear, limit, output_json):
     table.add_column("Time", style="cyan")
     table.add_column("Query", style="bold white")
     table.add_column("Results", justify="right", style="green")
+    table.add_column("Annotation", style="yellow", max_width=40)
 
     for i, entry in enumerate(shown, 1):
         dt = datetime.fromisoformat(entry.timestamp).astimezone()
         time_str = dt.strftime("%Y-%m-%d %H:%M")
-        table.add_row(str(i), time_str, entry.query, str(entry.num_results))
+        ann = entry.annotation or ""
+        table.add_row(str(i), time_str, entry.query, str(entry.num_results), ann)
 
     out.print(table)
 
