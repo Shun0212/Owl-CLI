@@ -24,6 +24,9 @@ uv tool install git+https://github.com/Shun0212/Owl-CLI.git
 
 # Now use `owl` anywhere
 owl search "authentication logic"
+
+# Update to latest version
+uv tool upgrade owl-cli
 ```
 
 Or run without installing:
