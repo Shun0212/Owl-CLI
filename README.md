@@ -185,6 +185,39 @@ owl search "error handling" --json
 
 The `--json` flag outputs machine-readable results for any tool to consume.
 
+## GitHub Copilot Integration
+
+Add a `.vscode/mcp.json` file to your project root:
+
+```json
+{
+  "servers": {
+    "owl-cli": {
+      "command": "owl",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+If you haven't installed Owl-CLI globally, use `uvx` instead:
+
+```json
+{
+  "servers": {
+    "owl-cli": {
+      "command": "uvx",
+      "args": [
+        "--from", "git+https://github.com/Shun0212/Owl-CLI.git",
+        "owl", "mcp"
+      ]
+    }
+  }
+}
+```
+
+Once configured, `search_code`, `index_code`, and `index_status` tools become available in Copilot's agent mode (Copilot Chat).
+
 ## How It Works
 
 1. **Extract** -- tree-sitter parses Python source files and extracts every function/method with metadata (name, class, line range)
