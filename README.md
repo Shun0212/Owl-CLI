@@ -103,8 +103,11 @@ owl status
 # Show current configuration
 owl config
 
-# Clear cache
+# Clear cache for current directory
 owl config --clear-cache
+
+# Clear all caches
+owl config --clear-all-cache
 ```
 
 ## Configuration
@@ -112,9 +115,11 @@ owl config --clear-cache
 Settings are resolved in this order (later overrides earlier):
 
 1. **Defaults** -- `Shuu12121/Owl-ph2-len2048`, batch_size=8, top_k=10
-2. **`.owl/config.json`** -- Project-local config file
+2. **`~/.cache/owl-cli/<hash>/config.json`** -- Per-directory config file
 3. **Environment variables** -- `OWL_MODEL_NAME`, `OWL_BATCH_SIZE`, `OWL_TOP_K`
 4. **CLI flags** -- `--model`, `--top-k`
+
+Caches are stored in `~/.cache/owl-cli/` and do not touch the target project directory.
 
 ### Environment variables
 

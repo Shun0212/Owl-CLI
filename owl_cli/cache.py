@@ -46,7 +46,7 @@ class CacheState:
 
     @classmethod
     def load(cls, target_dir: str) -> CacheState | None:
-        index_dir = Path(target_dir) / ".owl" / "index"
+        index_dir = get_index_dir(target_dir)
 
         meta_path = index_dir / "meta.json"
         funcs_path = index_dir / "functions.json"
@@ -145,7 +145,7 @@ def _load_gitignore_spec(root: Path) -> pathspec.PathSpec | None:
 def _should_skip(rel_path: str) -> bool:
     parts = Path(rel_path).parts
     skip_dirs = {
-        ".git", ".owl", "__pycache__", "node_modules",
+        ".git", "__pycache__", "node_modules",
         ".venv", "venv", ".tox", ".mypy_cache", ".ruff_cache",
         ".pytest_cache", "dist", "build", ".eggs",
     }

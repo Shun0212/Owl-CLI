@@ -153,26 +153,41 @@ def status(directory):
         dt = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone()
         table.add_row("Last indexed", dt.strftime("%Y-%m-%d %H:%M:%S"))
 
-    index_dir = get_index_dir(directory)
+    index_dir = get_index_dir(config.target_dir)
     size = sum(f.stat().st_size for f in index_dir.iterdir() if f.is_file())
     table.add_row("Cache size", _human_size(size))
+    table.add_row("Cache path", str(index_dir))
 
     out.print(table)
 
 
 @cli.command()
-@click.option("--clear-cache", is_flag=True, help="Clear the .owl/ cache.")
+@click.option("--clear-cache", is_flag=True, help="Clear the cache for this directory.")
+@click.option("--clear-all-cache", is_flag=True, help="Clear all owl-cli caches.")
 @click.option("--dir", "-d", "directory", default=".", help="Target directory.")
-def config(clear_cache, directory):
+def config(clear_cache, clear_all_cache, directory):
     """Show or manage configuration."""
     cfg = OwlConfig.load(target_dir=directory)
+
+    if clear_all_cache:
+        import shutil
+
+        from .config import get_cache_base
+
+        cache_base = get_cache_base()
+        if cache_base.exists():
+            shutil.rmtree(cache_base)
+            console.print("[green]All caches cleared.[/green]")
+        else:
+            console.print("[yellow]No cache to clear.[/yellow]")
+        return
 
     if clear_cache:
         import shutil
 
-        owl_dir = Path(directory) / ".owl"
-        if owl_dir.exists():
-            shutil.rmtree(owl_dir)
+        index_dir = get_index_dir(cfg.target_dir)
+        if index_dir.exists():
+            shutil.rmtree(index_dir)
             console.print("[green]Cache cleared.[/green]")
         else:
             console.print("[yellow]No cache to clear.[/yellow]")

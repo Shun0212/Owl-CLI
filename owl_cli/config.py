@@ -1,13 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
 DEFAULT_MODEL = "Shuu12121/Owl-ph2-len2048"
-OWL_DIR = ".owl"
-INDEX_DIR = ".owl/index"
+CACHE_BASE = Path.home() / ".cache" / "owl-cli"
 
 
 @dataclass
@@ -27,7 +27,7 @@ class OwlConfig:
     ) -> OwlConfig:
         config = cls(target_dir=str(Path(target_dir).resolve()))
 
-        config_path = Path(target_dir) / OWL_DIR / "config.json"
+        config_path = get_index_dir(config.target_dir) / "config.json"
         if config_path.exists():
             with open(config_path) as f:
                 data = json.load(f)
@@ -55,13 +55,13 @@ class OwlConfig:
         return config
 
 
-def get_owl_dir(target_dir: str = ".") -> Path:
-    path = Path(target_dir) / OWL_DIR
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-
 def get_index_dir(target_dir: str = ".") -> Path:
-    path = Path(target_dir) / INDEX_DIR
+    resolved = str(Path(target_dir).resolve())
+    dir_hash = hashlib.sha256(resolved.encode()).hexdigest()[:16]
+    path = CACHE_BASE / dir_hash
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def get_cache_base() -> Path:
+    return CACHE_BASE

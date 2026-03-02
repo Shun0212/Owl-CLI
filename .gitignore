@@ -1,10 +1,8 @@
-# Owl-CLI cache
-.owl/
-
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
 *$py.class
+owl_cli/extractors/.owl
 
 # C extensions
 *.so
