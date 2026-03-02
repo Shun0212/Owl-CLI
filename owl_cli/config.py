@@ -1,0 +1,67 @@
+from __future__ import annotations
+
+import json
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+
+DEFAULT_MODEL = "Shuu12121/Owl-ph2-len2048"
+OWL_DIR = ".owl"
+INDEX_DIR = ".owl/index"
+
+
+@dataclass
+class OwlConfig:
+    model_name: str = DEFAULT_MODEL
+    batch_size: int = 8
+    top_k: int = 10
+    file_extensions: list[str] = field(default_factory=lambda: [".py"])
+    target_dir: str = "."
+
+    @classmethod
+    def load(
+        cls,
+        target_dir: str = ".",
+        model_override: str | None = None,
+        top_k_override: int | None = None,
+    ) -> OwlConfig:
+        config = cls(target_dir=str(Path(target_dir).resolve()))
+
+        config_path = Path(target_dir) / OWL_DIR / "config.json"
+        if config_path.exists():
+            with open(config_path) as f:
+                data = json.load(f)
+            if "model_name" in data:
+                config.model_name = data["model_name"]
+            if "batch_size" in data:
+                config.batch_size = data["batch_size"]
+            if "top_k" in data:
+                config.top_k = data["top_k"]
+            if "file_extensions" in data:
+                config.file_extensions = data["file_extensions"]
+
+        if env_model := os.environ.get("OWL_MODEL_NAME"):
+            config.model_name = env_model
+        if env_batch := os.environ.get("OWL_BATCH_SIZE"):
+            config.batch_size = int(env_batch)
+        if env_top_k := os.environ.get("OWL_TOP_K"):
+            config.top_k = int(env_top_k)
+
+        if model_override:
+            config.model_name = model_override
+        if top_k_override is not None:
+            config.top_k = top_k_override
+
+        return config
+
+
+def get_owl_dir(target_dir: str = ".") -> Path:
+    path = Path(target_dir) / OWL_DIR
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def get_index_dir(target_dir: str = ".") -> Path:
+    path = Path(target_dir) / INDEX_DIR
+    path.mkdir(parents=True, exist_ok=True)
+    return path
