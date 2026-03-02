@@ -15,6 +15,7 @@ from rich.text import Text
 
 from . import __version__
 from .config import OwlConfig, get_index_dir
+from .history import clear_history, load_history
 from .indexer import CodeSearchEngine
 
 console = Console(stderr=True)
@@ -213,6 +214,48 @@ def mcp():
     from .mcp_server import run_mcp_server
 
     run_mcp_server()
+
+
+@cli.command()
+@click.option("--dir", "-d", "directory", default=".", help="Target directory.")
+@click.option("--clear", is_flag=True, help="Clear search history.")
+@click.option("--limit", "-n", default=20, type=int, help="Number of entries to show.")
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON.")
+def history(directory, clear, limit, output_json):
+    """Show or clear search history."""
+    target_dir = str(Path(directory).resolve())
+
+    if clear:
+        clear_history(target_dir)
+        console.print("[green]Search history cleared.[/green]")
+        return
+
+    entries = load_history(target_dir)
+
+    if not entries:
+        console.print("[yellow]No search history found.[/yellow]")
+        return
+
+    shown = entries[-limit:] if limit < len(entries) else entries
+
+    if output_json:
+        from dataclasses import asdict
+
+        click.echo(json.dumps([asdict(e) for e in shown], ensure_ascii=False, indent=2))
+        return
+
+    table = Table(title=f"Search History (showing {len(shown)} of {len(entries)})")
+    table.add_column("#", style="dim", justify="right")
+    table.add_column("Time", style="cyan")
+    table.add_column("Query", style="bold white")
+    table.add_column("Results", justify="right", style="green")
+
+    for i, entry in enumerate(shown, 1):
+        dt = datetime.fromisoformat(entry.timestamp).astimezone()
+        time_str = dt.strftime("%Y-%m-%d %H:%M")
+        table.add_row(str(i), time_str, entry.query, str(entry.num_results))
+
+    out.print(table)
 
 
 def _relative_path(file_path: str, base_dir: str) -> str:

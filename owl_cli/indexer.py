@@ -10,6 +10,7 @@ import numpy as np
 from .cache import CacheState, compute_file_hash, diff_files, scan_files
 from .config import OwlConfig
 from .extractors import extract_functions
+from .history import save_history_entry
 from .model import encode
 
 
@@ -174,6 +175,8 @@ class CodeSearchEngine:
                     score=float(score),
                 )
             )
+
+        save_history_entry(self.config.target_dir, query, results)
 
         return results
 

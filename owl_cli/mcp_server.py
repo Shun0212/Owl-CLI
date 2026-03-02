@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict
+from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
 from .config import OwlConfig
+from .history import clear_history, load_history
 from .indexer import CodeSearchEngine
 
 mcp = FastMCP("owl-cli")
@@ -100,6 +103,39 @@ def index_status(directory: str = ".") -> str:
         return json.dumps({"status": "no_index", "message": "No index found."})
 
     return json.dumps(info)
+
+
+@mcp.tool()
+def search_history(directory: str = ".", limit: int = 20, clear: bool = False) -> str:
+    """View or clear the search history for a project.
+
+    Args:
+        directory: Absolute path to the directory. You should always set this
+                   to the project you are working on.
+        limit: Maximum number of recent entries to return (default 20).
+        clear: If True, clear the history and return a confirmation.
+
+    Returns:
+        JSON array of history entries (most recent last), or a confirmation
+        message if clearing.
+    """
+    target_dir = str(Path(directory).resolve())
+
+    if clear:
+        clear_history(target_dir)
+        return json.dumps({"status": "cleared", "message": "Search history cleared."})
+
+    entries = load_history(target_dir)
+
+    if not entries:
+        return json.dumps({"status": "empty", "message": "No search history found."})
+
+    shown = entries[-limit:] if limit < len(entries) else entries
+    return json.dumps(
+        [asdict(e) for e in shown],
+        ensure_ascii=False,
+        indent=2,
+    )
 
 
 def run_mcp_server() -> None:
