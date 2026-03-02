@@ -19,12 +19,29 @@ Semantic code search using vector embeddings. Search your codebase with natural 
 ## Installation
 
 ```bash
-git clone https://github.com/Shun0212/Owl-CLI.git
-cd Owl-CLI
-uv sync
+# Install globally (recommended)
+uv tool install git+https://github.com/Shun0212/Owl-CLI.git
+
+# Now use `owl` anywhere
+owl search "authentication logic"
+```
+
+Or run without installing:
+
+```bash
+uvx --from git+https://github.com/Shun0212/Owl-CLI.git owl search "authentication logic"
 ```
 
 The first run will download the embedding model (~400MB) from Hugging Face.
+
+### For development
+
+```bash
+git clone https://github.com/Shun0212/Owl-CLI.git
+cd Owl-CLI
+uv sync
+uv run owl search "query"
+```
 
 ## Usage
 
@@ -32,41 +49,41 @@ The first run will download the embedding model (~400MB) from Hugging Face.
 
 ```bash
 # Basic search (auto-indexes on first run)
-uv run owl search "authentication logic"
+owl search "authentication logic"
 
 # Limit results
-uv run owl search "error handling" -k 5
+owl search "error handling" -k 5
 
 # Search a specific directory
-uv run owl search "database connection" --dir ./my-project
+owl search "database connection" --dir ./my-project
 
 # JSON output (for scripting)
-uv run owl search "file parsing" --json
+owl search "file parsing" --json
 
 # Show only function names without code bodies
-uv run owl search "validation" --no-code
+owl search "validation" --no-code
 
 # Use a different model
-uv run owl search "config loading" --model Shuu12121/Owl-ph2-len2048
+owl search "config loading" --model Shuu12121/Owl-ph2-len2048
 ```
 
 ### Index
 
 ```bash
 # Build index for current directory
-uv run owl index
+owl index
 
 # Force full rebuild (ignore cache)
-uv run owl index --force
+owl index --force
 
 # Index a specific directory
-uv run owl index --dir ./my-project
+owl index --dir ./my-project
 ```
 
 ### Status
 
 ```bash
-uv run owl status
+owl status
 ```
 
 ```
@@ -84,10 +101,10 @@ uv run owl status
 
 ```bash
 # Show current configuration
-uv run owl config
+owl config
 
 # Clear cache
-uv run owl config --clear-cache
+owl config --clear-cache
 ```
 
 ## Configuration
@@ -124,22 +141,12 @@ Settings are resolved in this order (later overrides earlier):
 Register the MCP server so Claude Code can call `search_code`, `index_code`, and `index_status` as tools:
 
 ```bash
-claude mcp add --transport stdio --scope project owl-cli -- \
-  uv --directory /path/to/Owl-CLI run owl mcp
-```
+# If installed via uv tool install
+claude mcp add --transport stdio --scope user owl-cli -- owl mcp
 
-Or place `.mcp.json` in the target project's root:
-
-```json
-{
-  "mcpServers": {
-    "owl-cli": {
-      "type": "stdio",
-      "command": "uv",
-      "args": ["--directory", "/path/to/Owl-CLI", "run", "owl", "mcp"]
-    }
-  }
-}
+# Or run directly without installing
+claude mcp add --transport stdio --scope user owl-cli -- \
+  uvx --from git+https://github.com/Shun0212/Owl-CLI.git owl mcp
 ```
 
 Once registered, Claude Code can semantically search your codebase during conversations.
