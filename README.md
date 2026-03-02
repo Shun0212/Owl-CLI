@@ -29,6 +29,16 @@ owl search "authentication logic"
 uv tool upgrade owl-cli
 ```
 
+If `owl` command is not found after install, add `~/.local/bin` to your PATH:
+
+```bash
+# bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+
+# zsh
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+```
+
 Or run without installing:
 
 ```bash
@@ -38,6 +48,8 @@ uvx --from git+https://github.com/Shun0212/Owl-CLI.git owl search "authenticatio
 The first run will download the embedding model (~400MB) from Hugging Face.
 
 ### For development
+
+> **Note:** Development is done on macOS.
 
 ```bash
 git clone https://github.com/Shun0212/Owl-CLI.git
