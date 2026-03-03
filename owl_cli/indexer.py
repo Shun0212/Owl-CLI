@@ -142,6 +142,17 @@ class CodeSearchEngine:
         if self.cache is None or self.cache.faiss_index is None:
             print("No index found, building...", file=sys.stderr)
             self.build_index()
+        else:
+            files = scan_files(
+                self.config.target_dir, self.config.file_extensions
+            )
+            current_hashes = {f: compute_file_hash(f) for f in files}
+            changed, _, deleted = diff_files(
+                current_hashes, self.cache.file_hashes
+            )
+            if changed or deleted:
+                print("Files changed, rebuilding index...", file=sys.stderr)
+                self.build_index()
 
         if self.cache is None or self.cache.faiss_index is None:
             return []
