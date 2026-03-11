@@ -24,8 +24,13 @@ out = Console()
 
 @click.group()
 @click.version_option(version=__version__, prog_name="owl-cli")
-def cli():
+@click.pass_context
+def cli(ctx):
     """owl-cli: Semantic code search using vector embeddings."""
+    if ctx.invoked_subcommand != "mcp":
+        from .banner import print_banner
+
+        print_banner(console)
 
 
 @cli.command()

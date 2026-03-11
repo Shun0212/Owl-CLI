@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import os
 import sys
 import warnings
 
@@ -29,6 +30,16 @@ def get_device() -> str:
     return _device
 
 
+def _is_model_cached(model_name: str) -> bool:
+    """Check if the model already exists in the HuggingFace cache."""
+    hf_home = os.environ.get(
+        "HF_HOME", os.path.join(os.path.expanduser("~"), ".cache", "huggingface")
+    )
+    cache_dir = os.path.join(hf_home, "hub")
+    model_dir = f"models--{model_name.replace('/', '--')}"
+    return os.path.isdir(os.path.join(cache_dir, model_dir))
+
+
 def get_model(model_name: str = DEFAULT_MODEL) -> SentenceTransformer:
     global _model, _model_name, _device
 
@@ -37,6 +48,11 @@ def get_model(model_name: str = DEFAULT_MODEL) -> SentenceTransformer:
 
     device = get_device()
     warnings.filterwarnings("ignore", message=".*torch.compile.*")
+
+    if not _is_model_cached(model_name):
+        from .banner import print_download_banner
+
+        print_download_banner(model_name)
 
     try:
         _model = SentenceTransformer(model_name, device=device)
