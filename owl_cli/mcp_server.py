@@ -14,7 +14,12 @@ mcp = FastMCP("owl-cli")
 
 
 @mcp.tool()
-def search_code(query: str, top_k: int = 10, directory: str = ".") -> str:
+def search_code(
+    query: str,
+    top_k: int = 10,
+    directory: str = ".",
+    exclude_patterns: list[str] | None = None,
+) -> str:
     """Search code semantically using natural language.
 
     IMPORTANT: The query MUST be written in English. The default embedding
@@ -34,12 +39,16 @@ def search_code(query: str, top_k: int = 10, directory: str = ".") -> str:
         directory: Absolute path to the directory to search in. You should
                    always set this to the project you are working on.
                    Use a subdirectory to narrow scope if needed.
+        exclude_patterns: Optional list of glob patterns to exclude from indexing.
+                          Examples: ["tests/", "src/tests/**", "*_test.py"]
 
     Returns:
         JSON array of matching functions with file paths, line numbers,
         and relevance scores.
     """
     config = OwlConfig.load(target_dir=directory, top_k_override=top_k)
+    if exclude_patterns:
+        config.exclude_patterns = list(config.exclude_patterns) + exclude_patterns
     engine = CodeSearchEngine(config)
     results = engine.search(query)
 
@@ -69,18 +78,26 @@ def search_code(query: str, top_k: int = 10, directory: str = ".") -> str:
 
 
 @mcp.tool()
-def index_code(directory: str = ".", force: bool = False) -> str:
+def index_code(
+    directory: str = ".",
+    force: bool = False,
+    exclude_patterns: list[str] | None = None,
+) -> str:
     """Build or update the semantic search index for a codebase.
 
     Args:
         directory: Absolute path to the directory to index. You should
                    always set this to the project you are working on.
         force: Force full rebuild, ignoring cache.
+        exclude_patterns: Optional list of glob patterns to exclude from indexing.
+                          Examples: ["tests/", "src/tests/**", "*_test.py"]
 
     Returns:
         JSON object with indexing stats.
     """
     config = OwlConfig.load(target_dir=directory)
+    if exclude_patterns:
+        config.exclude_patterns = list(config.exclude_patterns) + exclude_patterns
     engine = CodeSearchEngine(config)
     result = engine.build_index(force=force)
 
@@ -174,6 +191,49 @@ def annotate_search(
     if ok:
         return json.dumps({"status": "ok", "message": "Annotation saved."})
     return json.dumps({"status": "error", "message": "History entry not found."})
+
+
+@mcp.tool()
+def detect_excludes(directory: str = ".") -> str:
+    """Auto-detect directories and file patterns that likely contain
+    non-production code (tests, examples, benchmarks, etc.).
+
+    Returns suggestions that the user can review before applying.
+    Use this before index_code to help the user decide what to exclude.
+
+    Args:
+        directory: Absolute path to the project directory. You should
+                   always set this to the project you are working on.
+
+    Returns:
+        JSON object with suggested exclude patterns, each with a reason
+        and matched file count.
+    """
+    from .cache import detect_exclude_suggestions
+
+    config = OwlConfig.load(target_dir=directory)
+    suggestions = detect_exclude_suggestions(
+        config.target_dir, config.file_extensions
+    )
+
+    existing = set(config.exclude_patterns)
+    data = [
+        {
+            "pattern": s.pattern,
+            "reason": s.reason,
+            "file_count": s.file_count,
+            "already_excluded": s.pattern in existing,
+        }
+        for s in suggestions
+    ]
+    return json.dumps(
+        {
+            "suggestions": data,
+            "current_exclude_patterns": config.exclude_patterns,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
 
 
 def run_mcp_server() -> None:

@@ -42,7 +42,7 @@ class CodeSearchEngine:
         start = time.time()
         target = self.config.target_dir
 
-        files = scan_files(target, self.config.file_extensions)
+        files = scan_files(target, self.config.file_extensions, self.config.exclude_patterns)
         if not files:
             return IndexResult(0, 0, time.time() - start, False)
 
@@ -144,7 +144,9 @@ class CodeSearchEngine:
             self.build_index()
         else:
             files = scan_files(
-                self.config.target_dir, self.config.file_extensions
+                self.config.target_dir,
+                self.config.file_extensions,
+                self.config.exclude_patterns,
             )
             current_hashes = {f: compute_file_hash(f) for f in files}
             changed, _, deleted = diff_files(

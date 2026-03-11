@@ -18,6 +18,7 @@ class OwlConfig:
     file_extensions: list[str] = field(default_factory=lambda: [".py"])
     target_dir: str = "."
     auto_annotate: bool = False
+    exclude_patterns: list[str] = field(default_factory=list)
 
     @classmethod
     def load(
@@ -42,6 +43,8 @@ class OwlConfig:
                 config.file_extensions = data["file_extensions"]
             if "auto_annotate" in data:
                 config.auto_annotate = bool(data["auto_annotate"])
+            if "exclude_patterns" in data:
+                config.exclude_patterns = data["exclude_patterns"]
 
         if env_model := os.environ.get("OWL_MODEL_NAME"):
             config.model_name = env_model

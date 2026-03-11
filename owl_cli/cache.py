@@ -87,12 +87,15 @@ def compute_file_hash(path: str | Path) -> str:
 def scan_files(
     directory: str,
     file_extensions: list[str] | None = None,
+    exclude_patterns: list[str] | None = None,
 ) -> list[str]:
     if file_extensions is None:
         file_extensions = [".py"]
 
     root = Path(directory).resolve()
     gitignore_spec = _load_gitignore_spec(root)
+    owlignore_spec = _load_owlignore_spec(root)
+    exclude_spec = _build_exclude_spec(exclude_patterns)
 
     results: list[str] = []
     for ext in file_extensions:
@@ -103,6 +106,10 @@ def scan_files(
             if _should_skip(rel):
                 continue
             if gitignore_spec and gitignore_spec.match_file(rel):
+                continue
+            if owlignore_spec and owlignore_spec.match_file(rel):
+                continue
+            if exclude_spec and exclude_spec.match_file(rel):
                 continue
             results.append(str(path))
 
@@ -140,6 +147,141 @@ def _load_gitignore_spec(root: Path) -> pathspec.PathSpec | None:
             return pathspec.PathSpec.from_lines("gitwildmatch", f)
     except OSError:
         return None
+
+
+def _load_owlignore_spec(root: Path) -> pathspec.PathSpec | None:
+    owlignore = root / ".owlignore"
+    if not owlignore.exists():
+        return None
+    try:
+        with open(owlignore) as f:
+            return pathspec.PathSpec.from_lines("gitwildmatch", f)
+    except OSError:
+        return None
+
+
+def _build_exclude_spec(patterns: list[str] | None) -> pathspec.PathSpec | None:
+    if not patterns:
+        return None
+    return pathspec.PathSpec.from_lines("gitwildmatch", patterns)
+
+
+@dataclass
+class ExcludeSuggestion:
+    pattern: str
+    reason: str
+    file_count: int
+
+
+# Well-known directory names that typically contain non-production code.
+_KNOWN_NON_PROD_DIRS: dict[str, str] = {
+    "tests": "test suite",
+    "test": "test suite",
+    "testing": "test suite",
+    "spec": "test specs",
+    "specs": "test specs",
+    "__tests__": "test suite (JS-style)",
+    "examples": "example / demo code",
+    "example": "example / demo code",
+    "samples": "sample code",
+    "sample": "sample code",
+    "demos": "demo code",
+    "demo": "demo code",
+    "benchmarks": "benchmark code",
+    "benchmark": "benchmark code",
+    "docs": "documentation",
+    "doc": "documentation",
+    "fixtures": "test fixtures",
+    "scripts": "utility scripts",
+    "tools": "utility tools",
+    "migrations": "database migrations",
+    "e2e": "end-to-end tests",
+    "integration": "integration tests",
+    "stubs": "type stubs",
+}
+
+# File-name patterns that typically indicate non-production code.
+_KNOWN_NON_PROD_PATTERNS: dict[str, str] = {
+    "test_*.py": "test files (pytest convention)",
+    "*_test.py": "test files (suffix convention)",
+    "conftest.py": "pytest configuration",
+    "setup.py": "package setup script",
+    "noxfile.py": "Nox automation",
+    "fabfile.py": "Fabric deploy script",
+    "tasks.py": "Invoke task runner",
+    "Gruntfile.js": "Grunt task runner",
+    "gulpfile.js": "Gulp task runner",
+    "webpack.config.*": "Webpack config",
+    "vite.config.*": "Vite config",
+    "jest.config.*": "Jest config",
+    "*.stories.*": "Storybook stories",
+    "*.spec.*": "spec / test files",
+    "*.test.*": "test files",
+}
+
+
+def detect_exclude_suggestions(
+    directory: str,
+    file_extensions: list[str] | None = None,
+) -> list[ExcludeSuggestion]:
+    """Scan the project and suggest directories / patterns to exclude."""
+    if file_extensions is None:
+        file_extensions = [".py"]
+
+    root = Path(directory).resolve()
+    gitignore_spec = _load_gitignore_spec(root)
+    owlignore_spec = _load_owlignore_spec(root)
+    ext_set = set(file_extensions)
+
+    suggestions: list[ExcludeSuggestion] = []
+    seen_patterns: set[str] = set()
+
+    # 1) Check top-level and second-level directories against known names.
+    for depth_limit in (1, 2):
+        for d in sorted(root.rglob("*")):
+            if not d.is_dir():
+                continue
+            rel = d.relative_to(root)
+            if len(rel.parts) > depth_limit:
+                continue
+            if _should_skip(str(rel)):
+                continue
+            dirname = rel.parts[-1].lower()
+            if dirname in _KNOWN_NON_PROD_DIRS:
+                pattern = str(rel) + "/"
+                if pattern in seen_patterns:
+                    continue
+                # Count matching files inside.
+                count = sum(
+                    1
+                    for ext in ext_set
+                    for f in d.rglob(f"*{ext}")
+                    if f.is_file()
+                )
+                if count == 0:
+                    continue
+                reason = _KNOWN_NON_PROD_DIRS[dirname]
+                suggestions.append(ExcludeSuggestion(pattern, reason, count))
+                seen_patterns.add(pattern)
+
+    # 2) Check file-name patterns at the project root level.
+    for glob_pat, reason in _KNOWN_NON_PROD_PATTERNS.items():
+        matches = list(root.glob(glob_pat))
+        # Also check one level deep.
+        matches += list(root.glob(f"*/{glob_pat}"))
+        real_matches = [
+            m for m in matches
+            if m.is_file()
+            and m.suffix in ext_set
+            and not _should_skip(str(m.relative_to(root)))
+        ]
+        if real_matches and glob_pat not in seen_patterns:
+            suggestions.append(
+                ExcludeSuggestion(glob_pat, reason, len(real_matches))
+            )
+            seen_patterns.add(glob_pat)
+
+    return suggestions
 
 
 def _should_skip(rel_path: str) -> bool:
