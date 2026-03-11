@@ -16,7 +16,7 @@ Search your codebase with natural language — at the function level.
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![uv](https://img.shields.io/badge/uv-package%20manager-de5fe9)](https://docs.astral.sh/uv/)
 
-[Features](#-features) · [Quick Start](#-quick-start) · [Usage](#-usage) · [MCP Integration](#-mcp-integration) · [How It Works](#-how-it-works)
+[Features](#-features) · [Quick Start](#-quick-start) · [Usage](#-usage) · [Examples](#-real-world-examples) · [MCP Integration](#-mcp-integration) · [How It Works](#-how-it-works)
 
 </div>
 
@@ -49,6 +49,32 @@ $ owl search "handle database connection"
 
 > 💡 `grep "database"` → hundreds of noisy text matches<br>
 > 🦉 `owl search "handle database connection"` → the exact functions you need
+
+## 🌍 Real-World Examples
+
+Searching the [Flask](https://github.com/pallets/flask) codebase with production code only.
+
+**Step 1 — Auto-detect non-production files** with `owl config --auto-exclude`
+
+![auto-exclude](docs/images/example-autoexclude.png)
+
+owl scans the codebase and identifies tests, docs, and examples (59 files), leaving only `src/` (24 files · 388 functions) in the index.
+
+**Step 2 — Search production code** — `owl search "user session management" -k 3`
+
+![Session management search](docs/images/example-session.png)
+
+Results point directly to `src/flask/sessions.py` — real implementation code, not test stubs.
+
+**Step 3 — Search more** — `owl search "handle HTTP request routing" -k 3`
+
+![HTTP request routing search](docs/images/example-routing.png)
+
+**Check what's indexed** — `owl status`
+
+![Index status](docs/images/example-status.png)
+
+---
 
 ## ✨ Features
 
