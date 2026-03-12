@@ -378,30 +378,30 @@ class _InteractiveState:
 def _read_input(state: _InteractiveState) -> str:
     """Draw a framed input area with ANSI escapes and read user input.
 
-    Renders:
-        ──────────────────────────
-          type a query or :help
-        ──────────────────────────
+    Renders 4 lines:
+        ──────────────────────────        (top rule)
+          search query or :help           (dim hint — stays visible)
+          🦉 > [cursor here]             (input line)
+        ──────────────────────────        (bottom rule)
 
-    Then moves the cursor back up over the hint line so the user types
-    between the two rules.
+    Cursor is repositioned to the input line so the user types between
+    the hint and the bottom rule.
     """
     DIM = "\033[2m"
     RESET = "\033[0m"
-    UP2_CLEAR = "\033[2A\033[2K"
-    DOWN1 = "\033[1B\r"
 
     width = out.width
     rule = "─" * width
 
-    # Pre-draw: top rule, dim hint, bottom rule
+    # Pre-draw 4 lines: top rule, hint, blank (input), bottom rule
     sys.stdout.write(f"{DIM}{rule}{RESET}\n")
     sys.stdout.write(f"  {DIM}search query to find code, or :help for commands{RESET}\n")
+    sys.stdout.write("\n")
     sys.stdout.write(f"{DIM}{rule}{RESET}\n")
     sys.stdout.flush()
 
-    # Move cursor up to the hint line and clear it
-    sys.stdout.write(UP2_CLEAR)
+    # Move cursor up 2 lines (to the blank input line) and clear it
+    sys.stdout.write("\033[2A\033[2K")
     sys.stdout.flush()
 
     # Build plain-text prompt
@@ -418,7 +418,7 @@ def _read_input(state: _InteractiveState) -> str:
     raw = input(prompt)
 
     # Move cursor past the pre-drawn bottom rule
-    sys.stdout.write(DOWN1)
+    sys.stdout.write("\033[1B\r")
     sys.stdout.flush()
 
     return raw
