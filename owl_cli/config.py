@@ -15,7 +15,12 @@ class OwlConfig:
     model_name: str = DEFAULT_MODEL
     batch_size: int = 8
     top_k: int = 10
-    file_extensions: list[str] = field(default_factory=lambda: [".py"])
+    file_extensions: list[str] = field(
+        default_factory=lambda: [
+            ".py", ".js", ".jsx", ".ts", ".tsx",
+            ".java", ".go", ".rb", ".rs", ".php",
+        ]
+    )
     target_dir: str = "."
     auto_annotate: bool = False
     exclude_patterns: list[str] = field(default_factory=list)

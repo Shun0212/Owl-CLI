@@ -345,10 +345,10 @@ Settings are resolved in priority order:
 
 ```
                     ┌──────────────────────────────┐
-  .py files ──────▶ │  tree-sitter ──▶  functions  │
-                    └──────────────┬───────────────┘
-                                   │
-                    ┌──────────────▼───────────────┐
+  source files ───▶ │  tree-sitter ──▶  functions  │
+  (.py .js .ts     └──────────────┬───────────────┘
+   .java .go .rb                  │
+   .rs .php)        ┌──────────────▼───────────────┐
                     │    SentenceTransformers       │
                     │    encode to dense vectors    │
                     └──────────────┬───────────────┘
@@ -379,15 +379,31 @@ owl_cli/
 ├── history.py               # Search history & annotations
 ├── mcp_server.py            # FastMCP stdio server
 └── extractors/
-    ├── __init__.py           # Extension-based dispatch
-    └── python_extractor.py   # tree-sitter Python function extraction
+    ├── __init__.py              # Extension-based dispatch
+    ├── python_extractor.py      # Python (tree-sitter)
+    ├── javascript_extractor.py  # JavaScript / JSX (tree-sitter)
+    ├── typescript_extractor.py  # TypeScript / TSX (tree-sitter)
+    ├── java_extractor.py        # Java (tree-sitter)
+    ├── go_extractor.py          # Go (tree-sitter)
+    ├── ruby_extractor.py        # Ruby (tree-sitter)
+    ├── rust_extractor.py        # Rust (tree-sitter)
+    └── php_extractor.py         # PHP (tree-sitter)
 ```
 
 ## 🌐 Supported Languages
 
-Currently **Python** (`.py`).
+| Language | Extensions | Extraction |
+|----------|-----------|------------|
+| Python | `.py` | functions, methods, classes |
+| JavaScript | `.js`, `.jsx` | functions, methods, arrow functions |
+| TypeScript | `.ts`, `.tsx` | functions, methods, arrow functions |
+| Java | `.java` | methods, constructors |
+| Go | `.go` | functions, methods (with receiver type) |
+| Ruby | `.rb` | methods, singleton methods |
+| Rust | `.rs` | functions (with `impl` block detection) |
+| PHP | `.php` | functions, methods |
 
-The extractor architecture supports adding more languages — just create a new file in `owl_cli/extractors/`.
+All languages are enabled by default. Each uses [tree-sitter](https://tree-sitter.github.io/) for accurate AST-based function extraction.
 
 ## 🤝 Contributing
 

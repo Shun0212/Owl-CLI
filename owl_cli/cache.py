@@ -290,6 +290,16 @@ def _should_skip(rel_path: str) -> bool:
         ".git", "__pycache__", "node_modules",
         ".venv", "venv", ".tox", ".mypy_cache", ".ruff_cache",
         ".pytest_cache", "dist", "build", ".eggs",
+        # Go
+        "vendor",
+        # Rust
+        "target",
+        # Java
+        ".gradle", ".mvn", ".idea",
+        # Ruby
+        ".bundle",
+        # PHP
+        ".composer",
     }
     return bool(skip_dirs & set(parts))
 
