@@ -9,6 +9,7 @@ from pathlib import Path
 import click
 from rich.console import Console
 from rich.panel import Panel
+from rich.rule import Rule
 from rich.syntax import Syntax
 from rich.table import Table
 from rich.text import Text
@@ -23,12 +24,15 @@ console = Console(stderr=True)
 out = Console()
 
 
-@click.group()
+@click.group(invoke_without_command=True)
 @click.version_option(version=__version__, prog_name="owl-cli")
 @click.pass_context
 def cli(ctx):
     """owl-cli: Semantic code search using vector embeddings."""
-    if ctx.invoked_subcommand != "mcp":
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(interactive)
+        return
+    if ctx.invoked_subcommand not in ("mcp", "i"):
         from .banner import print_banner
 
         print_banner(console)
@@ -289,6 +293,10 @@ def history(directory, clear, limit, output_json, annotate):
 )
 def interactive(directory, model, top_k, no_code, exclude, languages):
     """Start interactive search session (keeps model loaded)."""
+    from .banner import print_banner
+
+    print_banner(console)
+
     config = OwlConfig.load(
         target_dir=directory,
         model_override=model,
@@ -299,52 +307,63 @@ def interactive(directory, model, top_k, no_code, exclude, languages):
 
     engine = CodeSearchEngine(config)
 
-    # Pre-warm: build/load index and load model into memory
-    console.print("[dim]Loading index...[/dim]")
-    idx_result = engine.build_index()
-    console.print(
-        f"[green]Ready.[/green] {idx_result.num_functions} functions "
-        f"in {idx_result.num_files} files"
-    )
+    with console.status("[bold cyan]  Loading index...", spinner="dots"):
+        idx_result = engine.build_index()
 
-    console.print("[dim]Warming up model...[/dim]")
     from .model import get_model
-    get_model(config.model_name)
-    console.print("[green]Model loaded.[/green]")
 
-    # Session state
+    with console.status("[bold cyan]  Loading model...", spinner="dots"):
+        get_model(config.model_name)
+
+    # Ready summary
+    out.print(Rule(style="dim"))
+    info_line = Text()
+    info_line.append("  Ready", style="bold green")
+    info_line.append("  |  ", style="dim")
+    info_line.append(f"{idx_result.num_functions}", style="bold")
+    info_line.append(" functions in ", style="dim")
+    info_line.append(f"{idx_result.num_files}", style="bold")
+    info_line.append(" files", style="dim")
+    info_line.append("  |  ", style="dim")
+    info_line.append(config.target_dir, style="dim")
+    out.print(info_line)
+    out.print(Rule(style="dim"))
+    out.print()
+
     state = _InteractiveState(
         top_k=config.top_k,
         no_code=no_code,
         languages=list(languages),
     )
 
-    console.print()
     _print_interactive_help()
-    console.print()
+    out.print()
 
     while True:
         try:
-            raw = input("\U0001F989 > ")
+            raw = _read_input(state)
         except (EOFError, KeyboardInterrupt):
-            console.print("\n[dim]Bye![/dim]")
+            out.print()
+            console.print("[dim]  Bye.[/dim]")
             break
 
         line = raw.strip()
         if not line:
             continue
 
-        # Colon commands
         if line.startswith(":"):
             should_exit = _handle_colon_command(line, state, engine, config)
             if should_exit:
                 break
             continue
 
-        # Normal query
+        t0 = time.time()
         lang_list = state.languages if state.languages else None
         results = engine.search(line, top_k=state.top_k, languages=lang_list)
-        _print_results(results, config.target_dir, state.no_code)
+        elapsed = time.time() - t0
+
+        _print_results(results, config.target_dir, state.no_code, elapsed)
+        out.print()
 
 
 class _InteractiveState:
@@ -356,21 +375,99 @@ class _InteractiveState:
         self.languages = languages
 
 
+def _read_input(state: _InteractiveState) -> str:
+    """Draw a framed input area with ANSI escapes and read user input.
+
+    Renders:
+        ──────────────────────────
+          type a query or :help
+        ──────────────────────────
+
+    Then moves the cursor back up over the hint line so the user types
+    between the two rules.
+    """
+    DIM = "\033[2m"
+    RESET = "\033[0m"
+    UP2_CLEAR = "\033[2A\033[2K"
+    DOWN1 = "\033[1B\r"
+
+    width = out.width
+    rule = "─" * width
+
+    # Pre-draw: top rule, dim hint, bottom rule
+    sys.stdout.write(f"{DIM}{rule}{RESET}\n")
+    sys.stdout.write(f"  {DIM}type a query or :help{RESET}\n")
+    sys.stdout.write(f"{DIM}{rule}{RESET}\n")
+    sys.stdout.flush()
+
+    # Move cursor up to the hint line and clear it
+    sys.stdout.write(UP2_CLEAR)
+    sys.stdout.flush()
+
+    # Build plain-text prompt
+    badges: list[str] = []
+    if state.languages:
+        badges.append(",".join(state.languages))
+    if state.no_code:
+        badges.append("no-code")
+    if state.top_k != 10:
+        badges.append(f"k={state.top_k}")
+    badge_str = f" ({' '.join(badges)})" if badges else ""
+    prompt = f"  \U0001F989{badge_str} > "
+
+    raw = input(prompt)
+
+    # Move cursor past the pre-drawn bottom rule
+    sys.stdout.write(DOWN1)
+    sys.stdout.flush()
+
+    return raw
+
+
 def _print_interactive_help() -> None:
-    help_table = Table(
-        show_header=False, box=None, padding=(0, 2), show_edge=False,
-    )
-    help_table.add_column(style="bold cyan")
-    help_table.add_column(style="dim")
-    help_table.add_row("(query text)", "search directly")
-    help_table.add_row(":lang [LANG ...]", "set language filter (empty = all)")
-    help_table.add_row(":top-k N", "set number of results")
-    help_table.add_row(":no-code", "toggle code display")
-    help_table.add_row(":reindex", "rebuild index")
-    help_table.add_row(":status", "show current settings")
-    help_table.add_row(":help", "show this help")
-    help_table.add_row(":quit", "exit")
-    out.print(help_table)
+    help_text = Text()
+    help_text.append("  :lang ", style="bold cyan")
+    help_text.append("py ts ...   ", style="dim")
+    help_text.append("set language filter\n", style="")
+    help_text.append("  :top-k ", style="bold cyan")
+    help_text.append("N          ", style="dim")
+    help_text.append("number of results\n", style="")
+    help_text.append("  :no-code          ", style="bold cyan")
+    help_text.append("toggle code display\n", style="")
+    help_text.append("  :reindex          ", style="bold cyan")
+    help_text.append("rebuild index\n", style="")
+    help_text.append("  :status           ", style="bold cyan")
+    help_text.append("show settings\n", style="")
+    help_text.append("  :help             ", style="bold cyan")
+    help_text.append("show this help\n", style="")
+    help_text.append("  :quit             ", style="bold cyan")
+    help_text.append("exit", style="")
+    out.print(Panel(
+        help_text,
+        title="[dim]Commands  (or just type a query to search)[/dim]",
+        title_align="left",
+        border_style="dim",
+        padding=(0, 1),
+    ))
+
+
+_LANG_ALIASES: dict[str, str] = {
+    "py": "python",
+    "js": "javascript",
+    "jsx": "javascript",
+    "ts": "typescript",
+    "tsx": "typescript",
+    "rb": "ruby",
+    "rs": "rust",
+}
+
+
+def _resolve_lang(name: str) -> str | None:
+    """Resolve a language name or alias. Returns None if invalid."""
+    low = name.lower()
+    if low in SUPPORTED_LANGUAGES:
+        return low
+    return _LANG_ALIASES.get(low)
 
 
 def _handle_colon_command(
@@ -385,72 +482,80 @@ def _handle_colon_command(
     args = parts[1:]
 
     if cmd in (":quit", ":q", ":exit"):
-        console.print("[dim]Bye![/dim]")
+        console.print("[dim]  Bye.[/dim]")
         return True
 
     if cmd in (":help", ":h"):
         _print_interactive_help()
         return False
 
-    if cmd in (":lang", ":language"):
+    if cmd in (":lang", ":language", ":l"):
         if not args:
             state.languages = []
-            console.print("[green]Language filter cleared (all languages).[/green]")
+            console.print("[green]  Language filter cleared (all languages).[/green]")
         else:
-            invalid = [a for a in args if a not in SUPPORTED_LANGUAGES]
-            if invalid:
-                console.print(
-                    f"[red]Unknown language(s): {', '.join(invalid)}[/red]\n"
-                    f"[dim]Supported: {', '.join(SUPPORTED_LANGUAGES)}[/dim]"
-                )
-                return False
-            state.languages = list(args)
-            console.print(f"[green]Language filter:[/green] {', '.join(state.languages)}")
+            resolved: list[str] = []
+            for a in args:
+                lang = _resolve_lang(a)
+                if lang is None:
+                    console.print(
+                        f"[red]  Unknown language: {a}[/red]\n"
+                        f"[dim]    Supported: {', '.join(SUPPORTED_LANGUAGES)}[/dim]"
+                    )
+                    return False
+                if lang not in resolved:
+                    resolved.append(lang)
+            state.languages = resolved
+            console.print(f"[green]  Language filter: {', '.join(state.languages)}[/green]")
         return False
 
-    if cmd == ":top-k":
+    if cmd in (":top-k", ":k"):
         if not args or not args[0].isdigit():
-            console.print(f"[dim]Current top_k: {state.top_k}[/dim]")
+            console.print(f"[dim]  Current top_k: {state.top_k}[/dim]")
         else:
             state.top_k = int(args[0])
-            console.print(f"[green]top_k set to {state.top_k}.[/green]")
+            console.print(f"[green]  top_k = {state.top_k}[/green]")
         return False
 
     if cmd == ":no-code":
         state.no_code = not state.no_code
         label = "hidden" if state.no_code else "shown"
-        console.print(f"[green]Code is now {label}.[/green]")
+        console.print(f"[green]  Code: {label}[/green]")
         return False
 
     if cmd == ":reindex":
-        console.print("[dim]Rebuilding index...[/dim]")
-        result = engine.build_index(force=True)
+        with console.status("[bold cyan]  Rebuilding index...", spinner="dots"):
+            result = engine.build_index(force=True)
         console.print(
-            f"[green]Indexed {result.num_functions} functions[/green] "
-            f"from {result.num_files} files ({result.time_taken:.2f}s)"
+            f"[green]  Indexed {result.num_functions} functions[/green] "
+            f"from {result.num_files} files [dim]({result.time_taken:.2f}s)[/dim]"
         )
         return False
 
     if cmd == ":status":
-        table = Table(show_header=False, box=None, padding=(0, 2), show_edge=False)
-        table.add_column(style="bold")
-        table.add_column()
-        table.add_row("Directory", config.target_dir)
-        table.add_row("Model", config.model_name)
-        table.add_row("Top K", str(state.top_k))
-        table.add_row("No-code", str(state.no_code))
-        table.add_row(
-            "Languages",
-            ", ".join(state.languages) if state.languages else "(all)",
-        )
         info = engine.get_status()
+        status_text = Text()
+        status_text.append(f"  Directory   {config.target_dir}\n", style="")
+        status_text.append(f"  Model       {config.model_name}\n", style="dim")
         if info:
-            table.add_row("Functions", str(info["num_functions"]))
-            table.add_row("Files", str(info["num_files"]))
-        out.print(table)
+            status_text.append(
+                f"  Index       {info['num_functions']} functions"
+                f" / {info['num_files']} files\n",
+                style="",
+            )
+        status_text.append(f"  top_k       {state.top_k}\n", style="")
+        lang_str = ", ".join(state.languages) if state.languages else "all"
+        status_text.append(f"  Languages   {lang_str}\n", style="")
+        code_str = "hidden" if state.no_code else "shown"
+        status_text.append(f"  Code        {code_str}", style="")
+        out.print(Panel(
+            status_text,
+            border_style="dim",
+            padding=(0, 1),
+        ))
         return False
 
-    console.print(f"[red]Unknown command: {cmd}[/red]  (type :help)")
+    console.print(f"[red]  Unknown command: {cmd}[/red]  [dim](type :help)[/dim]")
     return False
 
 
@@ -458,25 +563,36 @@ def _print_results(
     results: list,
     target_dir: str,
     no_code: bool,
+    elapsed: float | None = None,
 ) -> None:
     if not results:
-        console.print("[yellow]No results found.[/yellow]")
+        console.print("[yellow]  No results found.[/yellow]")
         return
+
+    # Summary line
+    summary = Text()
+    summary.append(f"  {len(results)} result(s)", style="bold")
+    if elapsed is not None:
+        summary.append(f"  {elapsed:.3f}s", style="dim")
+    out.print(summary)
+    out.print()
 
     for i, r in enumerate(results, 1):
         rel_file = _relative_path(r.file, target_dir)
         location = f"{rel_file}:{r.lineno}-{r.end_lineno}"
-        class_info = f"  Class: {r.class_name}" if r.class_name else ""
 
+        # Title line
         header = Text()
-        header.append(f"  #{i} ", style="bold cyan")
-        header.append(f"{r.name}", style="bold white")
-        header.append(f"  score: {r.score:.4f}", style="dim")
+        header.append(f" #{i} ", style="bold cyan")
+        header.append(r.name, style="bold white")
+        if r.class_name:
+            header.append(f"  ← {r.class_name}", style="yellow")
+        header.append(f"  {r.score:.4f}", style="dim")
+        if r.language:
+            header.append(f"  {r.language}", style="cyan dim")
 
         subtitle = Text()
-        subtitle.append(f"  {location}", style="green")
-        if class_info:
-            subtitle.append(class_info, style="yellow")
+        subtitle.append(f" {location}", style="green")
 
         if no_code:
             out.print(header)
