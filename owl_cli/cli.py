@@ -583,16 +583,16 @@ def _print_results(
 
         # Title line
         header = Text()
-        header.append(f" #{i} ", style="bold cyan")
-        header.append(r.name, style="bold white")
+        header.append(f" #{i} ", style="bold bright_cyan")
+        header.append(r.name, style="bold bright_white")
         if r.class_name:
-            header.append(f"  ← {r.class_name}", style="yellow")
-        header.append(f"  {r.score:.4f}", style="dim")
+            header.append(f"  ← {r.class_name}", style="bold bright_yellow")
+        header.append(f"  {r.score:.4f}", style="bright_magenta")
         if r.language:
-            header.append(f"  {r.language}", style="cyan dim")
+            header.append(f"  {r.language}", style="bold bright_cyan")
 
         subtitle = Text()
-        subtitle.append(f" {location}", style="green")
+        subtitle.append(f" {location}", style="bold bright_green")
 
         if no_code:
             out.print(header)
@@ -612,7 +612,7 @@ def _print_results(
                 title=header,
                 subtitle=subtitle,
                 subtitle_align="left",
-                border_style="dim",
+                border_style="bright_blue",
                 expand=True,
             )
             out.print(panel)
