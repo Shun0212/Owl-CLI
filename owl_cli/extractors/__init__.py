@@ -24,6 +24,21 @@ _EXTRACTORS: dict[str, callable] = {
     ".php": extract_php_functions,
 }
 
+LANGUAGE_MAP: dict[str, str] = {
+    ".py": "python",
+    ".js": "javascript",
+    ".jsx": "javascript",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".java": "java",
+    ".go": "go",
+    ".rb": "ruby",
+    ".rs": "rust",
+    ".php": "php",
+}
+
+SUPPORTED_LANGUAGES: list[str] = sorted(set(LANGUAGE_MAP.values()))
+
 
 def extract_functions(file_path: str | Path) -> list[dict]:
     file_path = Path(file_path)
@@ -33,6 +48,8 @@ def extract_functions(file_path: str | Path) -> list[dict]:
     if extractor is None:
         return []
 
+    language = LANGUAGE_MAP.get(ext, "unknown")
+
     try:
         source_bytes = file_path.read_bytes()
     except (OSError, UnicodeDecodeError) as e:
@@ -41,6 +58,7 @@ def extract_functions(file_path: str | Path) -> list[dict]:
     results = extractor(source_bytes)
     for func in results:
         func["file"] = str(file_path)
+        func["language"] = language
 
     return results
 

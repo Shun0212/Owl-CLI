@@ -19,6 +19,7 @@ def search_code(
     top_k: int = 10,
     directory: str = ".",
     exclude_patterns: list[str] | None = None,
+    languages: list[str] | None = None,
 ) -> str:
     """Search code semantically using natural language.
 
@@ -41,6 +42,9 @@ def search_code(
                    Use a subdirectory to narrow scope if needed.
         exclude_patterns: Optional list of glob patterns to exclude from indexing.
                           Examples: ["tests/", "src/tests/**", "*_test.py"]
+        languages: Optional list of languages to filter results by.
+                   Examples: ["python"], ["typescript", "javascript"]
+                   Supported: go, java, javascript, php, python, ruby, rust, typescript
 
     Returns:
         JSON array of matching functions with file paths, line numbers,
@@ -50,7 +54,7 @@ def search_code(
     if exclude_patterns:
         config.exclude_patterns = list(config.exclude_patterns) + exclude_patterns
     engine = CodeSearchEngine(config)
-    results = engine.search(query)
+    results = engine.search(query, languages=languages)
 
     data = [
         {
@@ -59,6 +63,7 @@ def search_code(
             "lineno": r.lineno,
             "end_lineno": r.end_lineno,
             "class_name": r.class_name,
+            "language": r.language,
             "score": round(r.score, 4),
             "code": r.code,
         }

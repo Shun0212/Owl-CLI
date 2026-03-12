@@ -23,6 +23,7 @@ class SearchResult:
     end_lineno: int
     class_name: str | None
     score: float
+    language: str = ""
 
 
 @dataclass
@@ -132,7 +133,12 @@ class CodeSearchEngine:
         elapsed = time.time() - start
         return IndexResult(len(files), len(all_functions), elapsed, False)
 
-    def search(self, query: str, top_k: int | None = None) -> list[SearchResult]:
+    def search(
+        self,
+        query: str,
+        top_k: int | None = None,
+        languages: list[str] | None = None,
+    ) -> list[SearchResult]:
         if top_k is None:
             top_k = self.config.top_k
 
@@ -166,17 +172,25 @@ class CodeSearchEngine:
             show_progress=False,
         )
 
-        k = min(top_k, self.cache.faiss_index.ntotal)
-        if k == 0:
+        lang_set = set(languages) if languages else None
+
+        # Fetch extra candidates when filtering by language
+        fetch_k = min(top_k * 3, self.cache.faiss_index.ntotal) if lang_set else min(top_k, self.cache.faiss_index.ntotal)
+        if fetch_k == 0:
             return []
 
-        scores, indices = self.cache.faiss_index.search(query_vec, k)
+        scores, indices = self.cache.faiss_index.search(query_vec, fetch_k)
 
         results: list[SearchResult] = []
         for score, idx in zip(scores[0], indices[0]):
             if idx < 0:
                 continue
             func = self.cache.functions[idx]
+            language = func.get("language", "")
+
+            if lang_set and language not in lang_set:
+                continue
+
             results.append(
                 SearchResult(
                     name=func["name"],
@@ -186,8 +200,12 @@ class CodeSearchEngine:
                     end_lineno=func["end_lineno"],
                     class_name=func.get("class_name"),
                     score=float(score),
+                    language=language,
                 )
             )
+
+            if len(results) >= top_k:
+                break
 
         save_history_entry(self.config.target_dir, query, results)
 

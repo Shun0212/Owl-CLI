@@ -41,7 +41,14 @@ def cli(ctx):
 @click.option("--json", "output_json", is_flag=True, help="Output as JSON.")
 @click.option("--no-code", is_flag=True, help="Hide function bodies.")
 @click.option("--exclude", "-e", multiple=True, help="Exclude patterns (glob). Repeatable.")
-def search(query, top_k, directory, model, output_json, no_code, exclude):
+@click.option(
+    "--language",
+    "-l",
+    "languages",
+    multiple=True,
+    help="Filter by language (e.g. python, typescript). Repeatable.",
+)
+def search(query, top_k, directory, model, output_json, no_code, exclude, languages):
     """Search code semantically. Auto-indexes on first run."""
     config = OwlConfig.load(
         target_dir=directory,
@@ -51,7 +58,8 @@ def search(query, top_k, directory, model, output_json, no_code, exclude):
     if exclude:
         config.exclude_patterns = list(config.exclude_patterns) + list(exclude)
     engine = CodeSearchEngine(config)
-    results = engine.search(query)
+    lang_list = list(languages) if languages else None
+    results = engine.search(query, languages=lang_list)
 
     if output_json:
         data = [
@@ -61,6 +69,7 @@ def search(query, top_k, directory, model, output_json, no_code, exclude):
                 "lineno": r.lineno,
                 "end_lineno": r.end_lineno,
                 "class_name": r.class_name,
+                "language": r.language,
                 "score": round(r.score, 4),
                 **({"code": r.code} if not no_code else {}),
             }
@@ -93,9 +102,10 @@ def search(query, top_k, directory, model, output_json, no_code, exclude):
             out.print(subtitle)
             out.print()
         else:
+            lexer = r.language if r.language else "python"
             code = Syntax(
                 r.code,
-                "python",
+                lexer,
                 theme="monokai",
                 line_numbers=True,
                 start_line=r.lineno,
