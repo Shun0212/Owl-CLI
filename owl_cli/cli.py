@@ -15,6 +15,7 @@ from rich.text import Text
 
 from . import __version__
 from .config import OwlConfig, get_index_dir
+from .extractors import SUPPORTED_LANGUAGES
 from .history import annotate_history, clear_history, load_history
 from .indexer import CodeSearchEngine
 
@@ -78,47 +79,7 @@ def search(query, top_k, directory, model, output_json, no_code, exclude, langua
         click.echo(json.dumps(data, ensure_ascii=False, indent=2))
         return
 
-    if not results:
-        console.print("[yellow]No results found.[/yellow]")
-        return
-
-    for i, r in enumerate(results, 1):
-        rel_file = _relative_path(r.file, config.target_dir)
-        location = f"{rel_file}:{r.lineno}-{r.end_lineno}"
-        class_info = f"  Class: {r.class_name}" if r.class_name else ""
-
-        header = Text()
-        header.append(f"  #{i} ", style="bold cyan")
-        header.append(f"{r.name}", style="bold white")
-        header.append(f"  score: {r.score:.4f}", style="dim")
-
-        subtitle = Text()
-        subtitle.append(f"  {location}", style="green")
-        if class_info:
-            subtitle.append(class_info, style="yellow")
-
-        if no_code:
-            out.print(header)
-            out.print(subtitle)
-            out.print()
-        else:
-            lexer = r.language if r.language else "python"
-            code = Syntax(
-                r.code,
-                lexer,
-                theme="monokai",
-                line_numbers=True,
-                start_line=r.lineno,
-            )
-            panel = Panel(
-                code,
-                title=header,
-                subtitle=subtitle,
-                subtitle_align="left",
-                border_style="dim",
-                expand=True,
-            )
-            out.print(panel)
+    _print_results(results, config.target_dir, no_code)
 
 
 @cli.command()
@@ -311,6 +272,234 @@ def history(directory, clear, limit, output_json, annotate):
         table.add_row(str(i), time_str, entry.query, str(entry.num_results), ann)
 
     out.print(table)
+
+
+@cli.command(name="i")
+@click.option("--dir", "-d", "directory", default=".", help="Directory to search.")
+@click.option("--model", "-m", default=None, help="Model name override.")
+@click.option("--top-k", "-k", default=None, type=int, help="Default number of results.")
+@click.option("--no-code", is_flag=True, help="Hide function bodies by default.")
+@click.option("--exclude", "-e", multiple=True, help="Exclude patterns (glob). Repeatable.")
+@click.option(
+    "--language",
+    "-l",
+    "languages",
+    multiple=True,
+    help="Default language filter. Repeatable.",
+)
+def interactive(directory, model, top_k, no_code, exclude, languages):
+    """Start interactive search session (keeps model loaded)."""
+    config = OwlConfig.load(
+        target_dir=directory,
+        model_override=model,
+        top_k_override=top_k,
+    )
+    if exclude:
+        config.exclude_patterns = list(config.exclude_patterns) + list(exclude)
+
+    engine = CodeSearchEngine(config)
+
+    # Pre-warm: build/load index and load model into memory
+    console.print("[dim]Loading index...[/dim]")
+    idx_result = engine.build_index()
+    console.print(
+        f"[green]Ready.[/green] {idx_result.num_functions} functions "
+        f"in {idx_result.num_files} files"
+    )
+
+    console.print("[dim]Warming up model...[/dim]")
+    from .model import get_model
+    get_model(config.model_name)
+    console.print("[green]Model loaded.[/green]")
+
+    # Session state
+    state = _InteractiveState(
+        top_k=config.top_k,
+        no_code=no_code,
+        languages=list(languages),
+    )
+
+    console.print()
+    _print_interactive_help()
+    console.print()
+
+    while True:
+        try:
+            raw = input("\U0001F989 > ")
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n[dim]Bye![/dim]")
+            break
+
+        line = raw.strip()
+        if not line:
+            continue
+
+        # Colon commands
+        if line.startswith(":"):
+            should_exit = _handle_colon_command(line, state, engine, config)
+            if should_exit:
+                break
+            continue
+
+        # Normal query
+        lang_list = state.languages if state.languages else None
+        results = engine.search(line, top_k=state.top_k, languages=lang_list)
+        _print_results(results, config.target_dir, state.no_code)
+
+
+class _InteractiveState:
+    __slots__ = ("top_k", "no_code", "languages")
+
+    def __init__(self, top_k: int, no_code: bool, languages: list[str]):
+        self.top_k = top_k
+        self.no_code = no_code
+        self.languages = languages
+
+
+def _print_interactive_help() -> None:
+    help_table = Table(
+        show_header=False, box=None, padding=(0, 2), show_edge=False,
+    )
+    help_table.add_column(style="bold cyan")
+    help_table.add_column(style="dim")
+    help_table.add_row("(query text)", "search directly")
+    help_table.add_row(":lang [LANG ...]", "set language filter (empty = all)")
+    help_table.add_row(":top-k N", "set number of results")
+    help_table.add_row(":no-code", "toggle code display")
+    help_table.add_row(":reindex", "rebuild index")
+    help_table.add_row(":status", "show current settings")
+    help_table.add_row(":help", "show this help")
+    help_table.add_row(":quit", "exit")
+    out.print(help_table)
+
+
+def _handle_colon_command(
+    line: str,
+    state: _InteractiveState,
+    engine: CodeSearchEngine,
+    config: OwlConfig,
+) -> bool:
+    """Handle a colon command. Returns True if the session should exit."""
+    parts = line.split()
+    cmd = parts[0].lower()
+    args = parts[1:]
+
+    if cmd in (":quit", ":q", ":exit"):
+        console.print("[dim]Bye![/dim]")
+        return True
+
+    if cmd in (":help", ":h"):
+        _print_interactive_help()
+        return False
+
+    if cmd in (":lang", ":language"):
+        if not args:
+            state.languages = []
+            console.print("[green]Language filter cleared (all languages).[/green]")
+        else:
+            invalid = [a for a in args if a not in SUPPORTED_LANGUAGES]
+            if invalid:
+                console.print(
+                    f"[red]Unknown language(s): {', '.join(invalid)}[/red]\n"
+                    f"[dim]Supported: {', '.join(SUPPORTED_LANGUAGES)}[/dim]"
+                )
+                return False
+            state.languages = list(args)
+            console.print(f"[green]Language filter:[/green] {', '.join(state.languages)}")
+        return False
+
+    if cmd == ":top-k":
+        if not args or not args[0].isdigit():
+            console.print(f"[dim]Current top_k: {state.top_k}[/dim]")
+        else:
+            state.top_k = int(args[0])
+            console.print(f"[green]top_k set to {state.top_k}.[/green]")
+        return False
+
+    if cmd == ":no-code":
+        state.no_code = not state.no_code
+        label = "hidden" if state.no_code else "shown"
+        console.print(f"[green]Code is now {label}.[/green]")
+        return False
+
+    if cmd == ":reindex":
+        console.print("[dim]Rebuilding index...[/dim]")
+        result = engine.build_index(force=True)
+        console.print(
+            f"[green]Indexed {result.num_functions} functions[/green] "
+            f"from {result.num_files} files ({result.time_taken:.2f}s)"
+        )
+        return False
+
+    if cmd == ":status":
+        table = Table(show_header=False, box=None, padding=(0, 2), show_edge=False)
+        table.add_column(style="bold")
+        table.add_column()
+        table.add_row("Directory", config.target_dir)
+        table.add_row("Model", config.model_name)
+        table.add_row("Top K", str(state.top_k))
+        table.add_row("No-code", str(state.no_code))
+        table.add_row(
+            "Languages",
+            ", ".join(state.languages) if state.languages else "(all)",
+        )
+        info = engine.get_status()
+        if info:
+            table.add_row("Functions", str(info["num_functions"]))
+            table.add_row("Files", str(info["num_files"]))
+        out.print(table)
+        return False
+
+    console.print(f"[red]Unknown command: {cmd}[/red]  (type :help)")
+    return False
+
+
+def _print_results(
+    results: list,
+    target_dir: str,
+    no_code: bool,
+) -> None:
+    if not results:
+        console.print("[yellow]No results found.[/yellow]")
+        return
+
+    for i, r in enumerate(results, 1):
+        rel_file = _relative_path(r.file, target_dir)
+        location = f"{rel_file}:{r.lineno}-{r.end_lineno}"
+        class_info = f"  Class: {r.class_name}" if r.class_name else ""
+
+        header = Text()
+        header.append(f"  #{i} ", style="bold cyan")
+        header.append(f"{r.name}", style="bold white")
+        header.append(f"  score: {r.score:.4f}", style="dim")
+
+        subtitle = Text()
+        subtitle.append(f"  {location}", style="green")
+        if class_info:
+            subtitle.append(class_info, style="yellow")
+
+        if no_code:
+            out.print(header)
+            out.print(subtitle)
+            out.print()
+        else:
+            lexer = r.language if r.language else "python"
+            code = Syntax(
+                r.code,
+                lexer,
+                theme="monokai",
+                line_numbers=True,
+                start_line=r.lineno,
+            )
+            panel = Panel(
+                code,
+                title=header,
+                subtitle=subtitle,
+                subtitle_align="left",
+                border_style="dim",
+                expand=True,
+            )
+            out.print(panel)
 
 
 def _interactive_auto_exclude(cfg: OwlConfig) -> None:
