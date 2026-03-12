@@ -396,7 +396,7 @@ def _read_input(state: _InteractiveState) -> str:
 
     # Pre-draw: top rule, dim hint, bottom rule
     sys.stdout.write(f"{DIM}{rule}{RESET}\n")
-    sys.stdout.write(f"  {DIM}type a query or :help{RESET}\n")
+    sys.stdout.write(f"  {DIM}search query to find code, or :help for commands{RESET}\n")
     sys.stdout.write(f"{DIM}{rule}{RESET}\n")
     sys.stdout.flush()
 
