@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 import faiss
 import numpy as np
@@ -142,25 +143,7 @@ class CodeSearchEngine:
         if top_k is None:
             top_k = self.config.top_k
 
-        if self.cache is None:
-            self.cache = CacheState.load(self.config.target_dir)
-
-        if self.cache is None or self.cache.faiss_index is None:
-            print("No index found, building...", file=sys.stderr)
-            self.build_index()
-        else:
-            files = scan_files(
-                self.config.target_dir,
-                self.config.file_extensions,
-                self.config.exclude_patterns,
-            )
-            current_hashes = {f: compute_file_hash(f) for f in files}
-            changed, _, deleted = diff_files(
-                current_hashes, self.cache.file_hashes
-            )
-            if changed or deleted:
-                print("Files changed, rebuilding index...", file=sys.stderr)
-                self.build_index()
+        self._ensure_index()
 
         if self.cache is None or self.cache.faiss_index is None:
             return []
@@ -210,6 +193,138 @@ class CodeSearchEngine:
         save_history_entry(self.config.target_dir, query, results)
 
         return results
+
+    def search_by_code(
+        self,
+        code: str,
+        top_k: int | None = None,
+        languages: list[str] | None = None,
+        exclude_file: str | None = None,
+        exclude_lineno: int | None = None,
+        threshold: float = 0.0,
+    ) -> list[SearchResult]:
+        """Search for functions semantically similar to given code text.
+
+        Args:
+            code: Source code to use as the search query.
+            top_k: Max results to return.
+            exclude_file: File path to exclude from results (for self-exclusion).
+            exclude_lineno: Line number to exclude (combined with exclude_file).
+            threshold: Minimum similarity score to include.
+        """
+        if top_k is None:
+            top_k = self.config.top_k
+
+        self._ensure_index()
+
+        if self.cache is None or self.cache.faiss_index is None:
+            return []
+
+        query_vec = encode(
+            [code],
+            model_name=self.config.model_name,
+            batch_size=1,
+            show_progress=False,
+        )
+
+        lang_set = set(languages) if languages else None
+        fetch_k = min(
+            top_k * 3 if lang_set else top_k + 5,
+            self.cache.faiss_index.ntotal,
+        )
+        if fetch_k == 0:
+            return []
+
+        scores, indices = self.cache.faiss_index.search(query_vec, fetch_k)
+
+        results: list[SearchResult] = []
+        for score, idx in zip(scores[0], indices[0]):
+            if idx < 0:
+                continue
+            if float(score) < threshold:
+                continue
+            func = self.cache.functions[idx]
+            language = func.get("language", "")
+
+            if lang_set and language not in lang_set:
+                continue
+
+            # Skip the query function itself
+            if (
+                exclude_file is not None
+                and func["file"] == exclude_file
+                and exclude_lineno is not None
+                and func["lineno"] == exclude_lineno
+            ):
+                continue
+
+            results.append(
+                SearchResult(
+                    name=func["name"],
+                    code=func["code"],
+                    file=func["file"],
+                    lineno=func["lineno"],
+                    end_lineno=func["end_lineno"],
+                    class_name=func.get("class_name"),
+                    score=float(score),
+                    language=language,
+                )
+            )
+
+            if len(results) >= top_k:
+                break
+
+        return results
+
+    def find_function(
+        self,
+        file_path: str,
+        function_name: str,
+    ) -> dict | None:
+        """Look up a function in the index by file path and name.
+
+        Returns the function dict or None if not found.
+        """
+        self._ensure_index()
+        if self.cache is None:
+            return None
+
+        resolved = str(Path(file_path).resolve())
+        for func in self.cache.functions:
+            if func["file"] == resolved and func["name"] == function_name:
+                return func
+        return None
+
+    def get_functions_in_file(self, file_path: str) -> list[dict]:
+        """Return all indexed functions in a given file."""
+        self._ensure_index()
+        if self.cache is None:
+            return []
+
+        resolved = str(Path(file_path).resolve())
+        return [f for f in self.cache.functions if f["file"] == resolved]
+
+    def _ensure_index(self) -> None:
+        """Load or build the index if not already available."""
+        if self.cache is None:
+            self.cache = CacheState.load(self.config.target_dir)
+
+        if self.cache is None or self.cache.faiss_index is None:
+            print("No index found, building...", file=sys.stderr)
+            self.build_index()
+        else:
+            files = scan_files(
+                self.config.target_dir,
+                self.config.file_extensions,
+                self.config.exclude_patterns,
+            )
+            current_hashes = {f: compute_file_hash(f) for f in files}
+            changed, _, deleted = diff_files(
+                current_hashes, self.cache.file_hashes
+            )
+            if changed or deleted:
+                print("Files changed, rebuilding index...", file=sys.stderr)
+                self.build_index()
 
     def get_status(self) -> dict | None:
         if self.cache is None:

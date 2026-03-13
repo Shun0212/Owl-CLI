@@ -16,6 +16,7 @@ from rich.text import Text
 
 from . import __version__
 from .config import OwlConfig, get_index_dir
+from .diff import ChangedFunction, get_changed_functions, run_git_diff
 from .extractors import SUPPORTED_LANGUAGES
 from .history import annotate_history, clear_history, load_history
 from .indexer import CodeSearchEngine
@@ -276,6 +277,201 @@ def history(directory, clear, limit, output_json, annotate):
         table.add_row(str(i), time_str, entry.query, str(entry.num_results), ann)
 
     out.print(table)
+
+
+@cli.command(name="diff")
+@click.argument("revision", required=False, default=None)
+@click.option("--staged", is_flag=True, help="Diff staged changes.")
+@click.option("--top-k", "-k", default=5, type=int, help="Similar functions per changed function.")
+@click.option("--dir", "-d", "directory", default=".", help="Directory to search.")
+@click.option("--model", "-m", default=None, help="Model name override.")
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON.")
+@click.option("--no-code", is_flag=True, help="Hide function bodies.")
+@click.option("--threshold", "-t", default=0.5, type=float, help="Minimum similarity score (0-1).")
+@click.option("--exclude", "-e", multiple=True, help="Exclude patterns (glob). Repeatable.")
+def diff_cmd(revision, staged, top_k, directory, model, output_json, no_code, threshold, exclude):
+    """Semantic search based on git diff — find related functions.
+
+    \b
+    Examples:
+        owl diff                  # unstaged changes
+        owl diff --staged         # staged changes
+        owl diff HEAD~1           # last commit
+        owl diff main..feature    # branch comparison
+    """
+    config = OwlConfig.load(target_dir=directory, model_override=model)
+    if exclude:
+        config.exclude_patterns = list(config.exclude_patterns) + list(exclude)
+    engine = CodeSearchEngine(config)
+
+    # Ensure the index is built
+    engine._ensure_index()
+    if engine.cache is None:
+        console.print("[red]Failed to build index.[/red]")
+        return
+
+    # Get git diff
+    diff_output = run_git_diff(
+        revision=revision, staged=staged, target_dir=config.target_dir
+    )
+    if not diff_output:
+        console.print("[yellow]No diff output (no changes detected).[/yellow]")
+        return
+
+    changed_funcs = get_changed_functions(
+        diff_output, engine.cache.functions, config.target_dir
+    )
+    if not changed_funcs:
+        console.print("[yellow]No indexed functions were changed in this diff.[/yellow]")
+        return
+
+    console.print(
+        f"[bold]{len(changed_funcs)} changed function(s)[/bold] found in diff."
+    )
+
+    all_groups: list[dict] = []
+
+    for cf in changed_funcs:
+        similar = engine.search_by_code(
+            cf.code,
+            top_k=top_k,
+            exclude_file=cf.file,
+            exclude_lineno=cf.lineno,
+            threshold=threshold,
+        )
+
+        if output_json:
+            all_groups.append({
+                "changed_function": {
+                    "name": cf.name,
+                    "file": cf.file,
+                    "lineno": cf.lineno,
+                    "end_lineno": cf.end_lineno,
+                    "class_name": cf.class_name,
+                    "language": cf.language,
+                },
+                "similar_functions": [
+                    {
+                        "name": r.name,
+                        "file": r.file,
+                        "lineno": r.lineno,
+                        "end_lineno": r.end_lineno,
+                        "class_name": r.class_name,
+                        "language": r.language,
+                        "score": round(r.score, 4),
+                        **({"code": r.code} if not no_code else {}),
+                    }
+                    for r in similar
+                ],
+            })
+        else:
+            _print_diff_group(cf, similar, config.target_dir, no_code)
+
+    if output_json:
+        click.echo(json.dumps(all_groups, ensure_ascii=False, indent=2))
+
+
+@cli.command(name="find-similar")
+@click.argument("target")
+@click.option("--top-k", "-k", default=None, type=int, help="Number of results.")
+@click.option("--dir", "-d", "directory", default=".", help="Directory to search.")
+@click.option("--model", "-m", default=None, help="Model name override.")
+@click.option("--json", "output_json", is_flag=True, help="Output as JSON.")
+@click.option("--no-code", is_flag=True, help="Hide function bodies.")
+@click.option("--threshold", "-t", default=0.5, type=float, help="Minimum similarity score (0-1).")
+@click.option("--exclude", "-e", multiple=True, help="Exclude patterns (glob). Repeatable.")
+def find_similar(target, top_k, directory, model, output_json, no_code, threshold, exclude):
+    """Find similar/duplicate implementations of a function.
+
+    \b
+    TARGET can be:
+        file.py::function_name   — search for a specific function
+        file.py                  — search for all functions in the file
+
+    \b
+    Examples:
+        owl find-similar src/auth/login.py::validate_token
+        owl find-similar src/utils.py
+    """
+    config = OwlConfig.load(
+        target_dir=directory,
+        model_override=model,
+        top_k_override=top_k,
+    )
+    if exclude:
+        config.exclude_patterns = list(config.exclude_patterns) + list(exclude)
+    engine = CodeSearchEngine(config)
+
+    # Parse target
+    if "::" in target:
+        file_part, func_name = target.rsplit("::", 1)
+        funcs_to_search = []
+        func = engine.find_function(file_part, func_name)
+        if func is None:
+            console.print(
+                f"[red]Function '{func_name}' not found in '{file_part}'.[/red]\n"
+                f"[dim]Hint: run `owl index` first, and check file path is relative to target dir.[/dim]"
+            )
+            return
+        funcs_to_search.append(func)
+    else:
+        funcs_to_search = engine.get_functions_in_file(target)
+        if not funcs_to_search:
+            console.print(
+                f"[red]No indexed functions found in '{target}'.[/red]\n"
+                f"[dim]Hint: run `owl index` first, and check file path is relative to target dir.[/dim]"
+            )
+            return
+
+    all_groups: list[dict] = []
+
+    for func in funcs_to_search:
+        similar = engine.search_by_code(
+            func["code"],
+            top_k=config.top_k,
+            exclude_file=func["file"],
+            exclude_lineno=func["lineno"],
+            threshold=threshold,
+        )
+
+        if output_json:
+            all_groups.append({
+                "query_function": {
+                    "name": func["name"],
+                    "file": func["file"],
+                    "lineno": func["lineno"],
+                    "end_lineno": func["end_lineno"],
+                    "class_name": func.get("class_name"),
+                    "language": func.get("language", ""),
+                },
+                "similar_functions": [
+                    {
+                        "name": r.name,
+                        "file": r.file,
+                        "lineno": r.lineno,
+                        "end_lineno": r.end_lineno,
+                        "class_name": r.class_name,
+                        "language": r.language,
+                        "score": round(r.score, 4),
+                        **({"code": r.code} if not no_code else {}),
+                    }
+                    for r in similar
+                ],
+            })
+        else:
+            cf = ChangedFunction(
+                name=func["name"],
+                code=func["code"],
+                file=func["file"],
+                lineno=func["lineno"],
+                end_lineno=func["end_lineno"],
+                class_name=func.get("class_name"),
+                language=func.get("language", ""),
+            )
+            _print_similar_group(cf, similar, config.target_dir, no_code)
+
+    if output_json:
+        click.echo(json.dumps(all_groups, ensure_ascii=False, indent=2))
 
 
 @cli.command(name="i")
@@ -616,6 +812,74 @@ def _print_results(
                 expand=True,
             )
             out.print(panel)
+
+
+def _print_diff_group(
+    changed: ChangedFunction,
+    similar: list,
+    target_dir: str,
+    no_code: bool,
+) -> None:
+    """Print a changed function and its semantically similar matches."""
+    rel = _relative_path(changed.file, target_dir)
+    loc = f"{rel}:{changed.lineno}-{changed.end_lineno}"
+
+    header = Text()
+    header.append("  ✏️  ", style="bold yellow")
+    header.append(changed.name, style="bold bright_white")
+    if changed.class_name:
+        header.append(f"  ← {changed.class_name}", style="bold bright_yellow")
+    if changed.language:
+        header.append(f"  {changed.language}", style="bold bright_cyan")
+    out.print(header)
+
+    loc_text = Text()
+    loc_text.append(f"     {loc}", style="bold bright_green")
+    out.print(loc_text)
+
+    if not similar:
+        out.print(Text("     No similar functions found.", style="dim"))
+        out.print()
+        return
+
+    out.print(Text(f"     → {len(similar)} similar function(s):", style="dim"))
+    out.print()
+    _print_results(similar, target_dir, no_code)
+    out.print()
+
+
+def _print_similar_group(
+    query_func: ChangedFunction,
+    similar: list,
+    target_dir: str,
+    no_code: bool,
+) -> None:
+    """Print a query function and its similar/duplicate matches."""
+    rel = _relative_path(query_func.file, target_dir)
+    loc = f"{rel}:{query_func.lineno}-{query_func.end_lineno}"
+
+    header = Text()
+    header.append("  🔎 ", style="bold cyan")
+    header.append(query_func.name, style="bold bright_white")
+    if query_func.class_name:
+        header.append(f"  ← {query_func.class_name}", style="bold bright_yellow")
+    if query_func.language:
+        header.append(f"  {query_func.language}", style="bold bright_cyan")
+    out.print(header)
+
+    loc_text = Text()
+    loc_text.append(f"     {loc}", style="bold bright_green")
+    out.print(loc_text)
+
+    if not similar:
+        out.print(Text("     No similar functions found.", style="dim"))
+        out.print()
+        return
+
+    out.print(Text(f"     → {len(similar)} similar function(s):", style="dim"))
+    out.print()
+    _print_results(similar, target_dir, no_code)
+    out.print()
 
 
 def _interactive_auto_exclude(cfg: OwlConfig) -> None:

@@ -84,6 +84,8 @@ Results point directly to `src/flask/sessions.py` — real implementation code, 
 | 🎯 | **Function-Level Granularity** | Results are individual functions with file paths and line numbers |
 | ⚡ | **Differential Caching** | Only re-embeds changed files; unchanged files reuse cached embeddings |
 | 🔄 | **Auto-Indexing** | First search automatically builds the index |
+| 🔀 | **Diff Analysis** | Find semantically related functions from git diff changes |
+| 🔎 | **Similarity Detection** | Detect duplicate or similar implementations across the codebase |
 | 🤖 | **MCP Server** | Integrates with Claude Code, GitHub Copilot, and other MCP tools |
 | 📜 | **Search History** | Saves every query; supports annotations from LLMs or users |
 | 📋 | **JSON Output** | Machine-readable output for scripting and tool integration |
@@ -164,6 +166,37 @@ owl index --force             # force full rebuild
 owl index --dir ./my-project  # index specific directory
 ```
 
+### `owl diff` — Semantic Diff Analysis
+
+Find functions semantically related to your code changes. Unlike `git diff` which only shows _what_ changed, `owl diff` reveals _what else in the codebase is related_ to those changes.
+
+```bash
+owl diff                      # unstaged changes
+owl diff --staged             # staged changes
+owl diff HEAD~1               # last commit
+owl diff main..feature        # branch comparison
+owl diff HEAD~3 -k 3          # top 3 similar per change
+owl diff HEAD~1 --threshold 0.7  # only high-similarity matches
+owl diff HEAD~1 --json        # JSON output for CI/CD
+```
+
+> 💡 `git diff` → shows changed lines only<br>
+> 🦉 `owl diff` → shows changed functions + semantically related code elsewhere
+
+### `owl find-similar` — Duplicate & Similar Code Detection
+
+Find duplicate or similar implementations across your codebase. Specify a function to see what else looks like it.
+
+```bash
+owl find-similar src/auth/login.py::validate_token  # specific function
+owl find-similar src/utils.py                       # all functions in file
+owl find-similar src/api.py::handle_request -k 5    # top 5 similar
+owl find-similar lib/parser.rb::parse --threshold 0.6  # similarity cutoff
+owl find-similar handlers/auth.go::Login --json     # JSON output
+```
+
+> 💡 "This code looks familiar…" → `owl find-similar` finds the other copies
+
 ### `owl status` — Check Index Status
 
 ```bash
@@ -215,7 +248,7 @@ owl config --clear-all-cache # clear all caches
 
 Owl-CLI works as an [MCP](https://modelcontextprotocol.io/) server, giving AI coding assistants semantic search capabilities.
 
-Available tools: `search_code` · `index_code` · `index_status`
+Available tools: `search_code` · `index_code` · `index_status` · `diff_search` · `find_similar`
 
 ### Claude Code
 
@@ -374,7 +407,8 @@ owl_cli/
 ├── cli.py                   # Click CLI entry point
 ├── config.py                # Configuration management
 ├── model.py                 # SentenceTransformer loading & encoding
-├── indexer.py               # CodeSearchEngine (build + search)
+├── indexer.py               # CodeSearchEngine (build + search + similarity)
+├── diff.py                  # Git diff parsing & changed-function detection
 ├── cache.py                 # Cache management
 ├── history.py               # Search history & annotations
 ├── mcp_server.py            # FastMCP stdio server

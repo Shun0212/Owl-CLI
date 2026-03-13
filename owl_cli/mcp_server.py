@@ -7,6 +7,7 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
 from .config import OwlConfig
+from .diff import get_changed_functions, run_git_diff
 from .history import annotate_history, clear_history, load_history
 from .indexer import CodeSearchEngine
 
@@ -239,6 +240,181 @@ def detect_excludes(directory: str = ".") -> str:
         ensure_ascii=False,
         indent=2,
     )
+
+
+@mcp.tool()
+def diff_search(
+    directory: str = ".",
+    revision: str | None = None,
+    staged: bool = False,
+    top_k: int = 5,
+    threshold: float = 0.5,
+    exclude_patterns: list[str] | None = None,
+) -> str:
+    """Find functions semantically related to git diff changes.
+
+    Analyzes what changed in a git diff, then finds other functions in the
+    codebase that are semantically similar to the changed code. Useful for
+    code review, finding impact of changes, and discovering related code.
+
+    Args:
+        directory: Absolute path to the git repository root. You should
+                   always set this to the project you are working on.
+        revision: Git revision range (e.g. "HEAD~1", "main..feature").
+                  If None, shows unstaged changes.
+        staged: If True, diff staged changes instead of unstaged.
+        top_k: Number of similar functions per changed function (default 5).
+        threshold: Minimum similarity score 0-1 (default 0.5).
+        exclude_patterns: Optional list of glob patterns to exclude.
+
+    Returns:
+        JSON array where each element contains a changed function and
+        its semantically similar functions found elsewhere in the codebase.
+    """
+    config = OwlConfig.load(target_dir=directory)
+    if exclude_patterns:
+        config.exclude_patterns = list(config.exclude_patterns) + exclude_patterns
+    engine = CodeSearchEngine(config)
+
+    engine._ensure_index()
+    if engine.cache is None:
+        return json.dumps({"status": "error", "message": "Failed to build index."})
+
+    diff_output = run_git_diff(
+        revision=revision, staged=staged, target_dir=config.target_dir
+    )
+    if not diff_output:
+        return json.dumps({"status": "no_changes", "message": "No diff output."})
+
+    changed_funcs = get_changed_functions(
+        diff_output, engine.cache.functions, config.target_dir
+    )
+    if not changed_funcs:
+        return json.dumps({
+            "status": "no_functions",
+            "message": "No indexed functions were changed in this diff.",
+        })
+
+    groups = []
+    for cf in changed_funcs:
+        similar = engine.search_by_code(
+            cf.code,
+            top_k=top_k,
+            exclude_file=cf.file,
+            exclude_lineno=cf.lineno,
+            threshold=threshold,
+        )
+        groups.append({
+            "changed_function": {
+                "name": cf.name,
+                "file": cf.file,
+                "lineno": cf.lineno,
+                "end_lineno": cf.end_lineno,
+                "class_name": cf.class_name,
+                "language": cf.language,
+            },
+            "similar_functions": [
+                {
+                    "name": r.name,
+                    "file": r.file,
+                    "lineno": r.lineno,
+                    "end_lineno": r.end_lineno,
+                    "class_name": r.class_name,
+                    "language": r.language,
+                    "score": round(r.score, 4),
+                    "code": r.code,
+                }
+                for r in similar
+            ],
+        })
+
+    return json.dumps(groups, ensure_ascii=False, indent=2)
+
+
+@mcp.tool()
+def find_similar(
+    target: str,
+    directory: str = ".",
+    top_k: int = 10,
+    threshold: float = 0.5,
+    exclude_patterns: list[str] | None = None,
+) -> str:
+    """Find similar or duplicate implementations of a specific function.
+
+    Takes a function reference and searches for semantically similar code
+    elsewhere in the codebase. Useful for detecting code duplication and
+    finding related implementations.
+
+    Args:
+        target: Function reference in the format "file.py::function_name"
+                for a specific function, or just "file.py" to analyze all
+                functions in the file. Path should be relative to directory.
+        directory: Absolute path to the project root. You should always
+                   set this to the project you are working on.
+        top_k: Number of similar functions to return (default 10).
+        threshold: Minimum similarity score 0-1 (default 0.5).
+        exclude_patterns: Optional list of glob patterns to exclude.
+
+    Returns:
+        JSON array where each element contains a query function and its
+        similar functions found in the codebase.
+    """
+    config = OwlConfig.load(target_dir=directory, top_k_override=top_k)
+    if exclude_patterns:
+        config.exclude_patterns = list(config.exclude_patterns) + exclude_patterns
+    engine = CodeSearchEngine(config)
+
+    if "::" in target:
+        file_part, func_name = target.rsplit("::", 1)
+        func = engine.find_function(file_part, func_name)
+        if func is None:
+            return json.dumps({
+                "status": "not_found",
+                "message": f"Function '{func_name}' not found in '{file_part}'.",
+            })
+        funcs_to_search = [func]
+    else:
+        funcs_to_search = engine.get_functions_in_file(target)
+        if not funcs_to_search:
+            return json.dumps({
+                "status": "not_found",
+                "message": f"No indexed functions found in '{target}'.",
+            })
+
+    groups = []
+    for func in funcs_to_search:
+        similar = engine.search_by_code(
+            func["code"],
+            top_k=config.top_k,
+            exclude_file=func["file"],
+            exclude_lineno=func["lineno"],
+            threshold=threshold,
+        )
+        groups.append({
+            "query_function": {
+                "name": func["name"],
+                "file": func["file"],
+                "lineno": func["lineno"],
+                "end_lineno": func["end_lineno"],
+                "class_name": func.get("class_name"),
+                "language": func.get("language", ""),
+            },
+            "similar_functions": [
+                {
+                    "name": r.name,
+                    "file": r.file,
+                    "lineno": r.lineno,
+                    "end_lineno": r.end_lineno,
+                    "class_name": r.class_name,
+                    "language": r.language,
+                    "score": round(r.score, 4),
+                    "code": r.code,
+                }
+                for r in similar
+            ],
+        })
+
+    return json.dumps(groups, ensure_ascii=False, indent=2)
 
 
 def run_mcp_server() -> None:
