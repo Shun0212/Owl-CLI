@@ -40,7 +40,7 @@ def cli(ctx):
     if ctx.invoked_subcommand is None:
         ctx.invoke(interactive)
         return
-    if ctx.invoked_subcommand not in ("mcp", "i"):
+    if ctx.invoked_subcommand not in ("mcp", "i", "interactive", "diff-search"):
         from .banner import print_banner
 
         print_banner(console)

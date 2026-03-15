@@ -14,7 +14,7 @@ CACHE_BASE = Path.home() / ".cache" / "owl-cli"
 class OwlConfig:
     model_name: str = DEFAULT_MODEL
     batch_size: int = 8
-    top_k: int = 10
+    top_k: int = 3
     file_extensions: list[str] = field(
         default_factory=lambda: [
             ".py", ".js", ".jsx", ".ts", ".tsx",
