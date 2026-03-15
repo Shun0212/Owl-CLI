@@ -107,6 +107,105 @@ def _regions_overlap(
     return False
 
 
+def get_branches(target_dir: str = ".") -> list[str]:
+    """List local git branch names (short format)."""
+    cmd = ["git", "-C", target_dir, "branch", "--format=%(refname:short)"]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return [b.strip() for b in result.stdout.splitlines() if b.strip()]
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return []
+
+
+def get_current_branch(target_dir: str = ".") -> str:
+    """Get the name of the currently checked-out branch."""
+    cmd = ["git", "-C", target_dir, "rev-parse", "--abbrev-ref", "HEAD"]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return result.stdout.strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return ""
+
+
+_HUNK_HEADER_RE = re.compile(
+    r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@"
+)
+
+
+def get_function_diff(
+    file_path: str,
+    func_start: int,
+    func_end: int,
+    revision: str,
+    target_dir: str = ".",
+) -> str:
+    """Extract unified diff lines that fall within a function's line range.
+
+    Tracks new-file line numbers within each hunk and only includes
+    lines whose position falls within [func_start, func_end].
+    """
+    try:
+        rel_path = str(Path(file_path).relative_to(Path(target_dir).resolve()))
+    except ValueError:
+        rel_path = file_path
+
+    cmd = ["git", "-C", target_dir, "diff", revision, "--", rel_path]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return ""
+
+    if not result.stdout:
+        return ""
+
+    # First pass: collect hunks as (header, [(diff_line, new_line_no), ...])
+    raw_lines = result.stdout.splitlines()
+    hunks: list[tuple[str, list[tuple[str, int]]]] = []
+    current_header = ""
+    current_items: list[tuple[str, int]] = []
+    line_no = 0
+
+    for raw in raw_lines:
+        m = _HUNK_HEADER_RE.match(raw)
+        if m:
+            if current_header:
+                hunks.append((current_header, current_items))
+            current_header = raw
+            current_items = []
+            line_no = int(m.group(3))
+            continue
+        if raw.startswith(("diff --git", "index ", "--- ", "+++ ")):
+            continue
+        if not current_header:
+            continue
+
+        if raw.startswith("-"):
+            # Deletion: associated with current position, doesn't advance
+            current_items.append((raw, line_no))
+        elif raw.startswith("+"):
+            # Addition: at line_no in new file, then advance
+            current_items.append((raw, line_no))
+            line_no += 1
+        else:
+            # Context: at line_no in new file, then advance
+            current_items.append((raw, line_no))
+            line_no += 1
+
+    if current_header:
+        hunks.append((current_header, current_items))
+
+    # Second pass: filter to lines within function range
+    output: list[str] = []
+    for _header, items in hunks:
+        filtered = [
+            dl for dl, ln in items if func_start <= ln <= func_end
+        ]
+        if filtered:
+            output.extend(filtered)
+
+    return "\n".join(output)
+
+
 def get_changed_functions(
     diff_output: str,
     indexed_functions: list[dict],

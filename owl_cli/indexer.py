@@ -276,6 +276,88 @@ class CodeSearchEngine:
 
         return results
 
+    def search_in_changed(
+        self,
+        query: str,
+        changed_functions: list,
+        top_k: int | None = None,
+        languages: list[str] | None = None,
+    ) -> list[SearchResult]:
+        """Search for a query only within the specified changed functions.
+
+        Builds a temporary FAISS index from the changed functions' embeddings
+        and searches within that subset.
+        """
+        if top_k is None:
+            top_k = self.config.top_k
+
+        self._ensure_index()
+        if self.cache is None or self.cache.embeddings is None:
+            return []
+
+        # Build lookup of changed function keys
+        changed_keys: set[tuple[str, int]] = set()
+        for cf in changed_functions:
+            if hasattr(cf, "file"):
+                changed_keys.add((cf.file, cf.lineno))
+            else:
+                changed_keys.add((cf["file"], cf["lineno"]))
+
+        # Find indices in cache that match changed functions
+        subset_indices: list[int] = []
+        subset_funcs: list[dict] = []
+        for i, func in enumerate(self.cache.functions):
+            if (func["file"], func["lineno"]) in changed_keys:
+                subset_indices.append(i)
+                subset_funcs.append(func)
+
+        if not subset_indices:
+            return []
+
+        # Build temporary FAISS index from subset
+        subset_embs = self.cache.embeddings[subset_indices]
+        dim = subset_embs.shape[1]
+        temp_index = faiss.IndexFlatIP(dim)
+        temp_index.add(subset_embs)
+
+        # Encode query and search
+        query_vec = encode(
+            [query],
+            model_name=self.config.model_name,
+            batch_size=1,
+            show_progress=False,
+        )
+
+        k = min(top_k, temp_index.ntotal)
+        if k == 0:
+            return []
+
+        scores, indices = temp_index.search(query_vec, k)
+
+        lang_set = set(languages) if languages else None
+        results: list[SearchResult] = []
+        for score, idx in zip(scores[0], indices[0]):
+            if idx < 0:
+                continue
+            func = subset_funcs[idx]
+            language = func.get("language", "")
+            if lang_set and language not in lang_set:
+                continue
+            results.append(
+                SearchResult(
+                    name=func["name"],
+                    code=func["code"],
+                    file=func["file"],
+                    lineno=func["lineno"],
+                    end_lineno=func["end_lineno"],
+                    class_name=func.get("class_name"),
+                    score=float(score),
+                    language=language,
+                )
+            )
+
+        return results
+
     def find_function(
         self,
         file_path: str,

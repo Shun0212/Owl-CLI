@@ -16,7 +16,14 @@ from rich.text import Text
 
 from . import __version__
 from .config import OwlConfig, get_index_dir
-from .diff import ChangedFunction, get_changed_functions, run_git_diff
+from .diff import (
+    ChangedFunction,
+    get_branches,
+    get_changed_functions,
+    get_current_branch,
+    get_function_diff,
+    run_git_diff,
+)
 from .extractors import SUPPORTED_LANGUAGES
 from .history import annotate_history, clear_history, load_history
 from .indexer import CodeSearchEngine
@@ -369,6 +376,181 @@ def diff_cmd(revision, staged, top_k, directory, model, output_json, no_code, th
 
     if output_json:
         click.echo(json.dumps(all_groups, ensure_ascii=False, indent=2))
+
+
+@cli.command(name="diff-search")
+@click.option("--dir", "-d", "directory", default=".", help="Directory to search.")
+@click.option("--model", "-m", default=None, help="Model name override.")
+@click.option("--top-k", "-k", default=None, type=int, help="Number of results.")
+@click.option("--no-code", is_flag=True, help="Hide function bodies.")
+@click.option("--exclude", "-e", multiple=True, help="Exclude patterns (glob). Repeatable.")
+@click.option(
+    "--language",
+    "-l",
+    "languages",
+    multiple=True,
+    help="Filter by language. Repeatable.",
+)
+def diff_search_cmd(directory, model, top_k, no_code, exclude, languages):
+    """Search only within changed functions between branches.
+
+    \b
+    Select a branch to compare interactively, then search
+    within functions that have changes. Results show diff context.
+    """
+    from .banner import print_banner
+
+    print_banner(console)
+
+    config = OwlConfig.load(
+        target_dir=directory,
+        model_override=model,
+        top_k_override=top_k,
+    )
+    if exclude:
+        config.exclude_patterns = list(config.exclude_patterns) + list(exclude)
+
+    engine = CodeSearchEngine(config)
+
+    with console.status("[bold cyan]  Loading index...", spinner="dots"):
+        idx_result = engine.build_index()
+
+    from .model import get_model
+
+    with console.status("[bold cyan]  Loading model...", spinner="dots"):
+        get_model(config.model_name)
+
+    # --- Branch selector ---
+    current = get_current_branch(config.target_dir)
+    branches = get_branches(config.target_dir)
+
+    if not branches:
+        console.print("[red]No git branches found.[/red]")
+        return
+
+    other_branches = [b for b in branches if b != current]
+    if not other_branches:
+        console.print("[red]No other branches to compare against.[/red]")
+        return
+
+    out.print()
+    out.print(Text(f"  Current branch: {current}", style="bold green"))
+    out.print()
+    out.print(Text("  Compare against:", style="bold"))
+
+    # Highlight main/master
+    default_idx = 1
+    for i, branch in enumerate(other_branches, 1):
+        marker = " *" if branch in ("main", "master") else ""
+        style = "bold yellow" if branch in ("main", "master") else ""
+        out.print(Text(f"    {i}) {branch}{marker}", style=style))
+        if branch in ("main", "master"):
+            default_idx = i
+
+    out.print()
+
+    try:
+        choice = input(
+            f"  Select [1-{len(other_branches)}] (default: {default_idx}): "
+        ).strip()
+    except (EOFError, KeyboardInterrupt):
+        out.print()
+        console.print("[dim]  Cancelled.[/dim]")
+        return
+
+    if not choice:
+        selected_idx = default_idx
+    else:
+        try:
+            selected_idx = int(choice)
+        except ValueError:
+            console.print("[red]  Invalid selection.[/red]")
+            return
+
+    if selected_idx < 1 or selected_idx > len(other_branches):
+        console.print("[red]  Invalid selection.[/red]")
+        return
+
+    base_branch = other_branches[selected_idx - 1]
+    # Compare base branch against working tree (not ..HEAD) so that
+    # line numbers in the diff match the index built from working tree.
+    revision = base_branch
+
+    console.print(f"\n[bold]  Comparing: {base_branch} -> {current}[/bold]")
+
+    # --- Analyze diff ---
+    with console.status("[bold cyan]  Analyzing diff...", spinner="dots"):
+        diff_output = run_git_diff(
+            revision=revision, target_dir=config.target_dir
+        )
+
+    if not diff_output:
+        console.print("[yellow]  No differences found.[/yellow]")
+        return
+
+    changed_funcs = get_changed_functions(
+        diff_output, engine.cache.functions, config.target_dir
+    )
+
+    if not changed_funcs:
+        console.print(
+            "[yellow]  No indexed functions were changed in this diff.[/yellow]"
+        )
+        return
+
+    # --- Summary ---
+    out.print(Rule(style="dim"))
+    summary = Text()
+    summary.append(f"  {len(changed_funcs)} changed function(s)", style="bold")
+    summary.append("  |  ", style="dim")
+    summary.append(f"{base_branch} -> {current}", style="dim")
+    out.print(summary)
+    out.print(Rule(style="dim"))
+    out.print()
+
+    _print_changed_list(changed_funcs, config.target_dir)
+    out.print()
+    _print_diff_search_help()
+    out.print()
+
+    # --- Interactive search loop ---
+    state = _InteractiveState(
+        top_k=config.top_k,
+        no_code=no_code,
+        languages=list(languages),
+    )
+
+    while True:
+        try:
+            raw = _read_diff_search_input(state)
+        except (EOFError, KeyboardInterrupt):
+            out.print()
+            console.print("[dim]  Bye.[/dim]")
+            break
+
+        line = raw.strip()
+        if not line:
+            continue
+
+        if line.startswith(":"):
+            should_exit = _handle_diff_search_colon(
+                line, state, engine, config, changed_funcs
+            )
+            if should_exit:
+                break
+            continue
+
+        t0 = time.time()
+        lang_list = state.languages if state.languages else None
+        results = engine.search_in_changed(
+            line, changed_funcs, top_k=state.top_k, languages=lang_list
+        )
+        elapsed = time.time() - t0
+
+        _print_diff_search_results(
+            results, config.target_dir, state.no_code, revision, elapsed
+        )
+        out.print()
 
 
 @cli.command(name="find-similar")
@@ -992,6 +1174,224 @@ def _update_exclude_patterns(
         console.print(f"\nCurrent exclude patterns: {', '.join(patterns)}")
     else:
         console.print("\nNo exclude patterns configured.")
+
+
+def _print_changed_list(
+    changed_funcs: list[ChangedFunction], target_dir: str
+) -> None:
+    """Print a numbered list of changed functions."""
+    for i, cf in enumerate(changed_funcs, 1):
+        rel = _relative_path(cf.file, target_dir)
+        line = Text()
+        line.append(f"  {i}. ", style="dim")
+        line.append(cf.name, style="bold bright_white")
+        if cf.class_name:
+            line.append(f" ({cf.class_name})", style="bright_yellow")
+        line.append(f"  {rel}:{cf.lineno}", style="bright_green")
+        out.print(line)
+
+
+def _print_diff_search_help() -> None:
+    help_text = Text()
+    help_text.append("  :list             ", style="bold cyan")
+    help_text.append("show changed functions\n", style="")
+    help_text.append("  :lang ", style="bold cyan")
+    help_text.append("py ts ...   ", style="dim")
+    help_text.append("set language filter\n", style="")
+    help_text.append("  :top-k ", style="bold cyan")
+    help_text.append("N          ", style="dim")
+    help_text.append("number of results\n", style="")
+    help_text.append("  :no-code          ", style="bold cyan")
+    help_text.append("toggle code display\n", style="")
+    help_text.append("  :help             ", style="bold cyan")
+    help_text.append("show this help\n", style="")
+    help_text.append("  :quit             ", style="bold cyan")
+    help_text.append("exit", style="")
+    out.print(Panel(
+        help_text,
+        title="[dim]Commands  (type a query to search within changes)[/dim]",
+        title_align="left",
+        border_style="dim",
+        padding=(0, 1),
+    ))
+
+
+def _read_diff_search_input(state: _InteractiveState) -> str:
+    """Draw a framed input for diff-search mode."""
+    DIM = "\033[2m"
+    RESET = "\033[0m"
+
+    width = out.width
+    rule = "─" * width
+
+    sys.stdout.write(f"{DIM}{rule}{RESET}\n")
+    sys.stdout.write(
+        f"  {DIM}search within changed code, or :help{RESET}\n"
+    )
+    sys.stdout.write("\n")
+    sys.stdout.write(f"{DIM}{rule}{RESET}\n")
+    sys.stdout.flush()
+
+    sys.stdout.write("\033[2A\033[2K")
+    sys.stdout.flush()
+
+    badges: list[str] = []
+    if state.languages:
+        badges.append(",".join(state.languages))
+    if state.no_code:
+        badges.append("no-code")
+    if state.top_k != 10:
+        badges.append(f"k={state.top_k}")
+    badge_str = f" ({' '.join(badges)})" if badges else ""
+    prompt = f"  \U0001F989\u0394{badge_str} > "
+
+    raw = input(prompt)
+
+    sys.stdout.write("\033[1B\r")
+    sys.stdout.flush()
+
+    return raw
+
+
+def _handle_diff_search_colon(
+    line: str,
+    state: _InteractiveState,
+    engine: CodeSearchEngine,
+    config: OwlConfig,
+    changed_funcs: list[ChangedFunction],
+) -> bool:
+    """Handle colon commands in diff-search mode. Returns True to exit."""
+    parts = line.split()
+    cmd = parts[0].lower()
+    args = parts[1:]
+
+    if cmd in (":quit", ":q", ":exit"):
+        console.print("[dim]  Bye.[/dim]")
+        return True
+
+    if cmd in (":help", ":h"):
+        _print_diff_search_help()
+        return False
+
+    if cmd == ":list":
+        _print_changed_list(changed_funcs, config.target_dir)
+        return False
+
+    if cmd in (":lang", ":language", ":l"):
+        if not args:
+            state.languages = []
+            console.print(
+                "[green]  Language filter cleared (all languages).[/green]"
+            )
+        else:
+            resolved: list[str] = []
+            for a in args:
+                lang = _resolve_lang(a)
+                if lang is None:
+                    console.print(
+                        f"[red]  Unknown language: {a}[/red]\n"
+                        f"[dim]    Supported: {', '.join(SUPPORTED_LANGUAGES)}[/dim]"
+                    )
+                    return False
+                if lang not in resolved:
+                    resolved.append(lang)
+            state.languages = resolved
+            console.print(
+                f"[green]  Language filter: {', '.join(state.languages)}[/green]"
+            )
+        return False
+
+    if cmd in (":top-k", ":k"):
+        if not args or not args[0].isdigit():
+            console.print(f"[dim]  Current top_k: {state.top_k}[/dim]")
+        else:
+            state.top_k = int(args[0])
+            console.print(f"[green]  top_k = {state.top_k}[/green]")
+        return False
+
+    if cmd == ":no-code":
+        state.no_code = not state.no_code
+        label = "hidden" if state.no_code else "shown"
+        console.print(f"[green]  Code: {label}[/green]")
+        return False
+
+    console.print(
+        f"[red]  Unknown command: {cmd}[/red]  [dim](type :help)[/dim]"
+    )
+    return False
+
+
+def _print_diff_search_results(
+    results: list,
+    target_dir: str,
+    no_code: bool,
+    revision: str,
+    elapsed: float | None = None,
+) -> None:
+    """Print search results with diff context for each matched function."""
+    if not results:
+        console.print("[yellow]  No matching changed functions.[/yellow]")
+        return
+
+    summary = Text()
+    summary.append(f"  {len(results)} result(s)", style="bold")
+    if elapsed is not None:
+        summary.append(f"  {elapsed:.3f}s", style="dim")
+    out.print(summary)
+    out.print()
+
+    for i, r in enumerate(results, 1):
+        rel_file = _relative_path(r.file, target_dir)
+        location = f"{rel_file}:{r.lineno}-{r.end_lineno}"
+
+        header = Text()
+        header.append(f" #{i} ", style="bold bright_cyan")
+        header.append(r.name, style="bold bright_white")
+        if r.class_name:
+            header.append(f"  <- {r.class_name}", style="bold bright_yellow")
+        header.append(f"  {r.score:.4f}", style="bright_magenta")
+        if r.language:
+            header.append(f"  {r.language}", style="bold bright_cyan")
+
+        subtitle = Text()
+        subtitle.append(f" {location}", style="bold bright_green")
+
+        # Get diff for this function
+        diff_text = get_function_diff(
+            r.file, r.lineno, r.end_lineno, revision, target_dir
+        )
+
+        if no_code:
+            # Compact: header + location only
+            out.print(header)
+            out.print(subtitle)
+            out.print()
+        elif diff_text:
+            # Show only the diff (already scoped to function range)
+            panel = Panel(
+                Syntax(diff_text, "diff", theme="monokai"),
+                title=header,
+                subtitle=subtitle,
+                subtitle_align="left",
+                border_style="bright_blue",
+                expand=True,
+            )
+            out.print(panel)
+        else:
+            # No diff available — show function code as fallback
+            lexer = r.language if r.language else "python"
+            panel = Panel(
+                Syntax(
+                    r.code, lexer, theme="monokai",
+                    line_numbers=True, start_line=r.lineno,
+                ),
+                title=header,
+                subtitle=subtitle,
+                subtitle_align="left",
+                border_style="bright_blue",
+                expand=True,
+            )
+            out.print(panel)
 
 
 def _relative_path(file_path: str, base_dir: str) -> str:
